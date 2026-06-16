@@ -25,7 +25,8 @@ generator client {
 
 datasource db {
   provider   = "postgresql"
-  url        = env("DATABASE_URL")
+  url        = env("DATABASE_URL") // pooled (PgBouncer in prod)
+  directUrl  = env("DIRECT_URL") // direct connection for `prisma migrate`
   extensions = [citext, pg_trgm]
 }
 
