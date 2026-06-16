@@ -7,6 +7,10 @@ declare global {
       id: string;
       /** Request-scoped child logger pre-tagged with the request id. */
       log: Logger;
+      /** Authenticated principal, set by the `authenticate` middleware. */
+      user?: { id: string; role: string; email: string };
+      /** Parsed query from `validate({ query })` (Express 5 makes `req.query` read-only). */
+      validatedQuery?: unknown;
     }
   }
 }

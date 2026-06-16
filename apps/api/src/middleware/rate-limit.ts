@@ -9,7 +9,7 @@ import { redis } from '../config/redis';
  * Factory for Redis-backed rate limiters so counters are shared across every API
  * instance (in-memory limits would reset per pod and be trivially bypassed).
  */
-export function createRateLimiter(overrides: Partial<Options> = {}): RequestHandler {
+export function createRateLimiter(name: string, overrides: Partial<Options> = {}): RequestHandler {
   return rateLimit({
     windowMs: env.RATE_LIMIT_WINDOW_MS,
     limit: env.RATE_LIMIT_MAX,
@@ -19,7 +19,9 @@ export function createRateLimiter(overrides: Partial<Options> = {}): RequestHand
       // Forward raw commands to ioredis. The runtime spreads all args; the cast
       // satisfies ioredis' overloaded `call` signature.
       sendCommand: (...args: string[]) => redis.call(...(args as [string])) as Promise<never>,
-      prefix: 'rl:',
+      // Distinct prefix per limiter, so independent limiters never share a counter
+      // (a shared key would make the strictest limit apply to the combined traffic).
+      prefix: `rl:${name}:`,
     }),
     handler: (req, res) => {
       res.status(429).json({
@@ -57,4 +59,4 @@ export function failOpen(limiter: RequestHandler): RequestHandler {
 }
 
 /** Global limiter applied to the whole versioned API surface (fail-open on store errors). */
-export const globalRateLimiter: RequestHandler = failOpen(createRateLimiter());
+export const globalRateLimiter: RequestHandler = failOpen(createRateLimiter('global'));

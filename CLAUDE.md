@@ -46,7 +46,7 @@ to **learn while building**. Production-quality code, industry-standard architec
 | 1  | Architecture         | ✅ Approved (hardened after review)      |
 | 2  | Database Design      | ✅ Approved (schema + raw-SQL migration)  |
 | 3  | Backend Setup        | ✅ Complete & verified — migration applied, seeded, /health/ready=200 (db+redis up) |
-| 4  | Authentication       | ⬜                                        |
+| 4  | Authentication       | ✅ Complete & verified — 10/10 tests + 13/13 e2e (register→verify→login→refresh/reuse→reset) |
 | 5  | File Upload System   | ⬜                                        |
 | 6  | File Sharing System  | ⬜                                        |
 | 7  | Frontend Development | ⬜                                        |
@@ -87,7 +87,15 @@ to **learn while building**. Production-quality code, industry-standard architec
 | CI AWS auth                  | GitHub OIDC assume-role (no static keys)                                 | Locked |
 | Quota model                  | Flat 10 GiB/user default for v1 (tiers/billing = P2 roadmap)             | **Locked** |
 | Folder delete                | Soft-delete via app logic; `parentId onDelete: Cascade` as purge safety net | **Locked** |
-| Redis client (cache/RL)      | finite `maxRetriesPerRequest: 3` + `enableOfflineQueue: false` → fail fast; BullMQ gets its own conn (`null`) in Phase 8 | **Locked** |
+| Redis client (cache/RL)      | `maxRetriesPerRequest: 3` + `commandTimeout: 1000ms` → fail fast w/o startup race; BullMQ gets its own conn (`null`) in Phase 8 | **Locked** |
+| Rate-limiter keys            | distinct Redis prefix per limiter (`rl:global:`, `rl:auth:`) so independent limits never share a counter | **Locked** |
+| Auth: JWT                    | EdDSA (Ed25519) via `jose`, `kid` header; 15m access TTL; keys = base64 PEM in env | **Locked** |
+| Auth: refresh                | random 256-bit token, sha256-hashed in DB, httpOnly cookie scoped to `/api/v1/auth`; rotation + family reuse-detection; SameSite none(prod)/lax(dev) + verifyOrigin CSRF guard | **Locked** |
+| Auth: passwords              | argon2id; login timing-equalized vs dummy hash; uniform "invalid email or password" | **Locked** |
+| Auth: email                  | Mailer interface — nodemailer→Mailpit (local), Resend (prod); verify (24h) + reset (1h) tokens, sha256-hashed | **Locked** |
+| Enumeration                  | forgot-password always 200; login uniform; register returns 409 (accepted tradeoff) | **Locked** |
+| Validation                   | `validate()` middleware; body/params mutated, query → `req.validatedQuery` (Express 5 query is read-only) | **Locked** |
+| Testing                      | Vitest (unit: argon2/jwt/tokens) + supertest integration (live DB) flow test; full test-DB isolation deferred to Phase 9 | **Locked** |
 | Rate limiting resilience     | `failOpen()` wrapper — Redis outage allows requests (logged), never 500s the API | **Locked** |
 | Readiness checks             | `withTimeout(2s)` per dependency so probes report `down` instead of hanging | **Locked** |
 | BigInt serialization         | `BigInt.prototype.toJSON` → string (avoid >2^53 precision loss on byte counters) | **Locked** |

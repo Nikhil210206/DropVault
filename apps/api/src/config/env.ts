@@ -28,6 +28,23 @@ const envSchema = z.object({
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
 
   LOG_LEVEL: z.enum(['error', 'warn', 'info', 'http', 'debug']).default('info'),
+
+  // ── Auth (JWT, EdDSA) — keys are base64-encoded PEM ──
+  JWT_PRIVATE_KEY: z.string().min(1),
+  JWT_PUBLIC_KEY: z.string().min(1),
+  JWT_KID: z.string().default('dev-1'),
+  JWT_ISSUER: z.string().default('dropvault'),
+  JWT_AUDIENCE: z.string().default('dropvault-api'),
+  ACCESS_TOKEN_TTL: z.coerce.number().int().positive().default(900), // seconds
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
+
+  // ── Email + web ──
+  WEB_URL: z.string().url().default('http://localhost:3000'),
+  MAIL_FROM: z.string().min(1).default('DropVault <no-reply@dropvault.local>'),
+  MAIL_TRANSPORT: z.enum(['smtp', 'resend']).default('smtp'),
+  SMTP_HOST: z.string().default('localhost'),
+  SMTP_PORT: z.coerce.number().int().positive().default(1025),
+  RESEND_API_KEY: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

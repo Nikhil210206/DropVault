@@ -9,11 +9,13 @@
     "build": "tsup",
     "start": "node dist/server.js",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@dropvault/shared": "workspace:*",
     "@prisma/client": "^6.3.0",
+    "argon2": "^0.41.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
@@ -21,7 +23,10 @@
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.0.0",
     "ioredis": "^5.4.2",
+    "jose": "^5.9.6",
+    "nodemailer": "^6.9.16",
     "rate-limit-redis": "^4.2.0",
+    "resend": "^4.0.1",
     "swagger-ui-express": "^5.0.1",
     "winston": "^3.17.0",
     "zod": "^3.24.1"
@@ -33,10 +38,14 @@
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.5",
+    "@types/nodemailer": "^6.4.17",
+    "@types/supertest": "^6.0.2",
     "@types/swagger-ui-express": "^4.1.7",
     "eslint": "^9.18.0",
+    "supertest": "^7.0.0",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
   }
 }
