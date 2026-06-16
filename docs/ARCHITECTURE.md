@@ -1,17 +1,18 @@
 # DropVault — System Architecture
 
-> Phase 1 deliverable. Status: **approved-pending**. This is the design we lock before writing code.
+> Phase 1 deliverable, **hardened after the Staff/Security/DevOps review** (P0/P1 fixes folded in).
 > Locked decisions: **Turborepo monorepo · Render (api + worker) · Resend email · MinIO local storage**.
 
 ## 0. Architecture philosophy & key bets
 
 1. **Browser uploads/downloads go directly to S3 via presigned URLs — never through our API.**
-   The Node server issues signed permissions and records metadata; it never proxies file bytes.
-   This keeps the API stateless, cheap, and lets S3 absorb the bandwidth.
-2. **The API is fully stateless.** All shared state (sessions, rate-limit counters, cache, job
-   queues, websocket fan-out) lives in Redis/Postgres, so we can run N identical API containers.
-3. **Heavy work is asynchronous.** Thumbnails, virus scanning, analytics rollups, and cleanup run
-   as jobs on a Redis-backed queue processed by a separate worker process.
+   The Node server issues signed permissions and records metadata; it never proxies bytes.
+2. **The API is fully stateless.** Shared state (sessions, rate-limit counters, cache, queues, ws
+   fan-out) lives in Redis/Postgres, so we run N identical API containers.
+3. **Heavy work is asynchronous.** Thumbnails, virus scanning, analytics, cleanup run as jobs on a
+   Redis-backed queue processed by a separate, sandboxed worker.
+4. **Untrusted bytes are treated as hostile** end-to-end: served from a cookieless domain, processed
+   in a locked-down worker, verified before they become visible.
 
 ---
 
@@ -23,136 +24,116 @@
                                   │   Browser (Next.js web app)   │
                                   └───────────────┬──────────────┘
                                                   │ HTTPS
-                  ┌───────────────────────────────┼───────────────────────────────┐
-                  │                                │                               │
-                  ▼                                ▼                               ▼
-        ┌───────────────────┐          ┌────────────────────┐          ┌────────────────────┐
-        │   Vercel (Edge)   │          │  Render: API (LB)   │          │      AWS S3        │
-        │  Next.js 15 SSR/  │  /api    │   Express (stateless)│  signed  │  (private bucket)  │
-        │  RSC + static     │─────────▶│                     │  PUT/GET │  files, thumbs,    │
-        └───────────────────┘          └─────────┬──────────┘ ◀────────│  avatars           │
-                  ▲                               │   ▲                 └──────────┬─────────┘
-                  │ presigned URLs (from API)     │   │                            │ direct upload/
-                  └───────────────────────────────┘   │                            │ download (browser↔S3)
-                                                       │                            │
-        ┌──────────────────────────────────────────────┴───────────────┐          │
-        │                  Stateful backing services (Render)            │         │
-        │  ┌────────────┐   ┌──────────────┐   ┌────────────────────┐    │         │
-        │  │ PostgreSQL │   │    Redis      │   │ Worker (Render svc)│◀───┼─────────┘
-        │  │ (metadata) │   │ cache/session │   │  BullMQ consumer:  │  completion ping
-        │  │            │   │ rate-limit,   │   │  thumbnails, scan, │
-        │  │            │   │ queues, ws    │   │  cleanup, rollups  │
-        │  └────────────┘   └──────────────┘   └─────────┬──────────┘
-        └──────────────────────────────────────────────────┼───────────┘
-                                                            ▼
-                                                  ┌──────────────────┐
-                                                  │ ClamAV (scan)    │
-                                                  │ Resend (email)   │
-                                                  └──────────────────┘
+        ┌─────────────────┬───────────────────────┼───────────────────────┬──────────────────┐
+        ▼                 ▼                        ▼                       ▼                  ▼
+┌──────────────┐  ┌──────────────┐      ┌────────────────────┐   ┌────────────────┐  ┌──────────────┐
+│ Vercel (Edge)│  │  CloudFront  │      │  Render: API (LB)  │   │   AWS S3       │  │ content CDN  │
+│ Next.js SSR/ │  │ signed URLs/ │/api  │ Express (stateless)│   │ private bucket │  │ cookieless   │
+│ RSC + static │  │ cookies      │─────▶│                    │   │ + Versioning   │  │ download/view│
+└──────────────┘  └──────┬───────┘      └─────────┬──────────┘   └───────┬────────┘  └──────┬───────┘
+                         │ origin-access            │   ▲                 │  direct PUT/GET   │
+                         └──────────────────────────┘   │                 │  (browser↔S3)     │
+                                                         │                 └───────────────────┘
+        ┌────────────────────────────────────────────────┴───────────────┐
+        │                  Stateful backing services (Render)              │
+        │  ┌────────────┐  ┌──────────┐  ┌──────────────┐  ┌────────────┐ │
+        │  │ PgBouncer  │──│ Postgres │  │    Redis      │  │  Worker    │ │
+        │  │ (txn pool) │  │ + PITR   │  │ cache/queue/  │  │ (sandboxed)│ │
+        │  └────────────┘  │ backups  │  │ rate-limit/ws │  │ scan+thumb │ │
+        │                  └──────────┘  └──────────────┘  └─────┬──────┘ │
+        └──────────────────────────────────────────────────────────┼──────┘
+                                                                    ▼
+                                                ┌───────────────────────────────┐
+                                                │ ClamAV · Resend · Sentry · OTel │
+                                                └───────────────────────────────┘
 ```
 
 **Request flows:**
-- **Auth/metadata** → Vercel → API → (Redis cache → Postgres) → response.
-- **Upload** → API issues presigned multipart URLs → browser PUTs chunks straight to S3 → browser
-  tells API "complete" → API finalizes + enqueues thumbnail/scan jobs → worker processes → Socket.IO
-  pushes "ready" to the browser.
-- **Download/preview** → API issues short-lived presigned GET → browser fetches from S3 (or CloudFront).
-- **Public share** → recipient hits `/s/:token` → Next.js renders → API validates token/password/expiry
-  → issues a scoped presigned GET.
+- **Auth/metadata** → Vercel → PgBouncer→Postgres / Redis cache → response.
+- **Upload** → API issues presigned multipart URLs **bound to a size range + content-type** → browser
+  PUTs chunks straight to S3 → "complete" → API **HEAD-verifies the object**, then creates the `files`
+  row in `SCANNING` and enqueues scan+thumbnail jobs → worker clears it to `READY` → client notified.
+- **Download/preview** → API verifies ownership/share, issues short-lived **CloudFront signed URL** (or
+  S3 presigned GET) on a **cookieless content domain** with `Content-Disposition: attachment`.
+- **Public share** → recipient hits `/s/:token` → API atomically checks token/password/expiry/limit →
+  issues a scoped, short-TTL download URL.
 
 ---
 
 ## 2. Low-Level Architecture (LLD)
 
-Clean / layered architecture with one-directional dependencies:
+Clean / layered architecture, one-directional dependencies:
 
 ```
-HTTP Request
-    ▼
 ROUTE        URL+verb → middleware chain → controller
-MIDDLEWARE   helmet · cors · requestId · logger · rateLimit · authenticate(JWT) ·
-             authorize(RBAC) · validate(Zod DTO) · csrf · errorHandler (terminal)
+MIDDLEWARE   helmet · cors(exact-origin) · requestId · logger(redacted) · rateLimit(per-ip+account+global)
+             · authenticate(JWT) · authorize(RBAC + ownership) · validate(Zod DTO) · csrf · errorHandler
 CONTROLLER   thin: validated input → service → HTTP response. No business logic.
-SERVICE      business rules, transactions, cache decisions, enqueues jobs, domain events.
-REPOSITORY   the ONLY layer that talks to Prisma. Returns domain entities.
-DATA/INFRA   PostgreSQL · Redis · S3 SDK · BullMQ · Resend · ClamAV
+SERVICE      business rules, transactions, atomic counters, cache invalidation, enqueues jobs.
+REPOSITORY   the ONLY layer that touches Prisma. Returns domain entities.
+DATA/INFRA   PgBouncer→PostgreSQL · Redis · S3 SDK · BullMQ · Resend · ClamAV
 ```
 
-**Why:** repositories isolate Prisma (mockable, swappable); services own transactions (e.g. create
-file + increment storage + audit must be atomic); controllers stay dumb and testable. DI via
-constructor-injection + factory wiring (not heavy decorator frameworks). Zod DTO validation at the
-edge means services receive trusted, typed data. Zod schemas double as OpenAPI source and shared FE/BE types.
+Repositories isolate Prisma (mockable/swappable); services own transactions and atomic operations;
+controllers stay dumb. DI via constructor-injection + factory wiring. Zod DTOs at the edge double as
+OpenAPI source and shared FE/BE types (`packages/shared`).
 
-**Module boundaries (vertical slices):** `auth`, `users`, `folders`, `files`, `uploads`, `shares`,
-`analytics`. Each slice owns routes/controller/service/repository/validators on top of the shared layers.
-
-**Worker process:** BullMQ consumer runs as its own Render service, importing the same services but
-driven by jobs — CPU-heavy thumbnailing can't starve API request handling.
+**Module slices:** `auth`, `users`, `folders`, `files`, `uploads`, `shares`, `analytics`.
+**Worker:** separate Render service, same code driven by jobs; **always-on (paid)**, sandboxed.
 
 ---
 
-## 3. Database Design (PostgreSQL)
+## 3. Database Design (PostgreSQL) — hardened
 
-Principles: soft deletes (`deletedAt`) for recoverable entities; BIGINT byte sizes; hashed secrets;
-append-only audit/download tables; explicit index on every FK and every filtered/sorted column.
+Principles: soft deletes (`deletedAt`); BIGINT byte sizes; hashed secrets; append-only audit/download;
+explicit indexes on every FK and filtered/sorted column; **UUIDv7 PKs** (time-ordered → B-tree locality).
 
-- **users** — `id` uuid pk, `email` citext unique, `passwordHash`, `name`, `avatarKey`,
-  `emailVerified`, `role` (USER/ADMIN), `storageUsed` bigint, `storageQuota` bigint, timestamps,
-  `deletedAt`. `storageUsed` is a transactional denormalized counter (reconciled nightly).
-- **refresh_tokens** — `id`, `userId` fk, `tokenHash` (sha-256) unique, `familyId`,
-  `replacedByTokenId` self-fk, `userAgent`, `ip`, `expiresAt`, `revokedAt`. Enables rotation +
-  reuse detection (reused token ⇒ revoke whole family).
-- **verification_tokens** — `id`, `userId` fk, `type` (EMAIL_VERIFY/PASSWORD_RESET), `tokenHash`,
-  `expiresAt`, `usedAt`.
-- **folders** — `id`, `userId` fk, `parentId` self-fk (null=root), `name`, `path` (materialized),
-  `deletedAt`. `unique(userId, parentId, name) where deletedAt is null`. Adjacency list +
-  materialized path: simple, fast subtree prefix scans, free breadcrumbs; cost = rewrite descendant
-  paths on move (transactional).
-- **files** — `id`, `userId` fk, `folderId` fk (null=root), `name`, `originalName`, `mimeType`,
-  `size` bigint, `storageKey`, `checksum` (sha-256), `status` (UPLOADING/SCANNING/READY/QUARANTINED/
-  FAILED), `thumbnailKey`, `version`, timestamps, `deletedAt`. Downloadable/shareable only when READY.
-- **upload_sessions** — `id`, `userId` fk, `fileId` fk (null until finalize), `s3UploadId`,
-  `storageKey`, `fileName`, `mimeType`, `totalSize`, `chunkSize`, `totalParts`,
-  `completedParts` jsonb, `status` (PENDING/IN_PROGRESS/COMPLETED/ABORTED/EXPIRED), `expiresAt`.
-  Source of truth for resuming uploads.
-- **shares** — `id`, `ownerId` fk, `fileId` fk?, `folderId` fk?, `token` unique, `visibility`
-  (PUBLIC/PRIVATE), `passwordHash?`, `expiresAt?`, `maxDownloads?`, `downloadCount`, `oneTime`,
-  `allowDownload`, `revokedAt`. `check (fileId XOR folderId)`. Encodes all six link types.
-- **downloads** (append-only) — `id`, `fileId` fk, `shareId` fk?, `actorUserId` fk?, `ip` inet,
-  `userAgent`, `country`, `bytesServed`, `createdAt`. Monthly-partition-friendly.
-- **audit_logs** (append-only) — `id`, `actorUserId` fk?, `action`, `entityType`, `entityId`,
-  `ip` inet, `userAgent`, `metadata` jsonb, `createdAt`.
+Tables: `users`, `refresh_tokens`, `verification_tokens`, `folders`, `files`, `upload_sessions`,
+**`upload_parts`** (new), `shares`, `downloads`, `audit_logs`. Full schema lives in
+`prisma/schema.prisma`.
 
-**Integrity & performance:** FK `onDelete` Cascade for tokens; soft-delete/Restrict for user→files;
-folder delete cascades via transactional app logic. Index every FK. Partial indexes
-(`where deletedAt is null`) keep live indexes small. Append-only tables → time partitioning at scale.
-Search v1 = `pg_trgm` GIN index on `files.name`; migrate to Meilisearch/OpenSearch if needed.
+**Review fixes baked into the schema:**
+- **`upload_parts` table** replaces the JSONB `completedParts` array → no row-rewrite contention, no
+  lost updates. (S3 `ListParts` remains the ultimate source of truth for resume.)
+- **Quota reservation** — `users.storageReserved` + `upload_sessions.reservedBytes`. Init reserves
+  bytes atomically (`storageUsed + storageReserved + new ≤ quota`); complete commits, abort/expire
+  releases. Kills the TOCTOU quota bypass.
+- **Partial unique indexes** (`WHERE "deletedAt" IS NULL`) on `users.email` and on
+  `folders(userId, parentId, name)` → soft-deleted rows don't block re-use. Added via raw-SQL migration
+  (Prisma can't express partial indexes declaratively).
+- **Atomic share limits** — `downloadCount`/`maxDownloads`/`oneTime` enforced by a conditional
+  `UPDATE ... WHERE downloadCount < maxDownloads RETURNING`, never via cache.
+- **XOR target** on `shares` — `CHECK (num_nonnulls("fileId","folderId") = 1)` (raw-SQL).
+- **`files.version`** has a defined meaning (current version counter for storage-key pathing); full
+  history (`file_versions`) is an explicit roadmap item, not an orphan column.
+- **Partition plan** — `downloads` and `audit_logs` are designed for monthly RANGE partitioning;
+  decision recorded now (introduce via `pg_partman` when volume warrants).
+- **Search** — `pg_trgm` GIN index on `files.name` (raw-SQL); migrate to Meilisearch/OpenSearch later.
 
-ER diagram and full Prisma schema are produced in Phase 2.
+ER diagram and the complete Prisma schema are produced in Phase 2.
 
 ---
 
 ## 4. API Design
 
-- Versioned base `/api/v1`, JSON only.
-- Access token (JWT ~15m) via `Authorization: Bearer`; refresh token in
-  `httpOnly; Secure; SameSite=Strict` cookie; `POST /auth/refresh` rotates it.
-- Error envelope: `{ "error": { "code", "message", "details", "requestId" } }`.
-- Cursor-based pagination; `Idempotency-Key` on unsafe creates; `X-Request-Id` + `X-RateLimit-*` headers.
+- Versioned base `/api/v1`, JSON only. Access token (JWT ~15m, **asymmetric EdDSA/RS256 with `kid`**)
+  via `Authorization: Bearer`; refresh token in `httpOnly; Secure; SameSite` cookie; `/auth/refresh`
+  rotates it with reuse detection.
+- Error envelope `{ "error": { "code", "message", "details", "requestId" } }`.
+- Cursor pagination; `Idempotency-Key` on unsafe creates; `X-Request-Id` + `X-RateLimit-*` headers.
+- Auth flows give **uniform responses** (no account enumeration); password change/reset **revokes all
+  refresh-token families**.
 
 | Module | Endpoints |
 | --- | --- |
 | Auth | `POST /auth/register · /login · /refresh · /logout · /verify-email · /forgot-password · /reset-password`; `GET /auth/me` |
-| Users | `GET/PATCH /users/me`; `POST /users/me/avatar`; `GET /users/me/storage` |
+| Users | `GET/PATCH /users/me`; `POST /users/me/avatar`; `GET /users/me/storage`; `GET/DELETE /users/me/sessions[/:id]` |
 | Folders | `POST /folders`; `GET /folders/:id`; `PATCH /folders/:id`; `DELETE /folders/:id`; `GET /folders/:id/children` |
-| Files | `GET /files` (list/search); `GET /files/:id`; `PATCH /files/:id` (rename/move); `POST /files/:id/copy`; `DELETE /files/:id`; `GET /files/:id/download`; `GET /files/:id/preview` |
-| Uploads | `POST /uploads` (init multipart); `GET /uploads/:id` (status/resume); `POST /uploads/:id/parts`; `POST /uploads/:id/complete`; `DELETE /uploads/:id` (abort) |
+| Files | `GET /files`; `GET /files/:id`; `PATCH /files/:id`; `POST /files/:id/copy`; `DELETE /files/:id`; `GET /files/:id/download`; `GET /files/:id/preview` |
+| Uploads | `POST /uploads`; `GET /uploads/:id`; `POST /uploads/:id/parts`; `POST /uploads/:id/complete`; `DELETE /uploads/:id` |
 | Shares | `POST /shares`; `GET /shares`; `DELETE /shares/:id`; `GET /shares/:token`; `POST /shares/:token/verify`; `GET /shares/:token/download` |
 | Analytics | `GET /analytics/overview`; `GET /files/:id/analytics` |
-| Health | `GET /health`; `GET /health/ready` |
-
-Request/response examples and error catalogs are generated via the Zod→OpenAPI pipeline and served
-at `/docs` (Swagger UI) from Phase 3.
+| Health | `GET /health` (liveness, no deps); `GET /health/ready` (checks DB/Redis/S3) |
 
 ---
 
@@ -161,67 +142,61 @@ at `/docs` (Swagger UI) from Phase 3.
 ```
 dropvault/
 ├── apps/
-│   ├── web/                      # Next.js 15 frontend
-│   │   └── src/{app,components,features,hooks,services,stores,lib,types,utils}/
-│   └── api/                      # Express backend
-│       └── src/
-│           ├── modules/          # vertical slices (auth, users, files, …)
-│           ├── middleware/  config/  jobs/  queues/  utils/  types/  docs/  tests/
-│           ├── app.ts            # express app (middleware wiring)
-│           ├── server.ts         # http + socket.io bootstrap
-│           └── worker.ts         # separate BullMQ worker entrypoint
-├── packages/
-│   ├── shared/                   # Zod schemas + inferred TS types (DTOs) shared by web AND api
-│   ├── config-eslint/  config-ts/
-├── prisma/                       # schema.prisma, migrations, seed
-├── docker/                       # Dockerfile.web, Dockerfile.api, compose files
-├── .github/workflows/            # ci.yml, cd.yml
-├── docs/                         # ARCHITECTURE.md (this), ADRs
-├── turbo.json  pnpm-workspace.yaml  package.json
+│   ├── web/   src/{app,components,features,hooks,services,stores,lib,types,utils}/
+│   └── api/   src/{modules,middleware,config,jobs,queues,utils,types,docs,tests}/  app.ts server.ts worker.ts
+├── packages/{shared (Zod DTOs+types), config-eslint, config-ts}/
+├── prisma/   schema.prisma, migrations/, seed.ts
+├── docker/   Dockerfile.web, Dockerfile.api, docker-compose.yml
+├── .github/workflows/  ci.yml, cd.yml
+├── docs/     ARCHITECTURE.md, ADRs
+└── turbo.json  pnpm-workspace.yaml  package.json
 ```
-
-Monorepo chosen for shared DTOs/types, one CI, atomic cross-stack PRs.
 
 ---
 
-## 6. Security Architecture (defense in depth)
+## 6. Security Architecture (defense in depth) — hardened
 
-- **Edge:** HTTPS + HSTS, CORS allowlist, CDN/WAF rate limiting (prod).
-- **App:** helmet (CSP, no-sniff, frame-deny), Redis-backed global + per-route rate limiting,
-  CSRF double-submit on cookie-auth routes, Zod input validation, output encoding, request-id correlation.
-- **AuthN/Z:** argon2id passwords; JWT access (15m); rotating refresh + reuse detection; RBAC; resource
-  ownership checks in every service.
-- **Data:** least-privilege Postgres role; parameterized Prisma queries; secrets in env/secret store; PII minimization.
-- **Storage:** private bucket (Block Public Access ON); presigned URLs scoped + short TTL; SSE at rest;
-  per-user key namespacing.
-- **Files:** size limits; MIME sniffing by magic bytes (not extension); extension allowlist; ClamAV scan
-  → QUARANTINED until clean.
+- **Content isolation (P0):** all user files served from a **separate cookieless domain** via
+  CloudFront; downloads forced to `Content-Disposition: attachment`; `X-Content-Type-Options: nosniff`;
+  inline previews under a strict sandboxed CSP. SVG/HTML never rendered inline on the app origin →
+  closes the stored-XSS → token-theft path.
+- **Untrusted-media worker (P0):** sandboxed — no network egress, dropped capabilities, read-only FS,
+  CPU/memory/time limits, per-job timeouts, decompression-bomb guards before decode; `sharp`/`ffmpeg`/
+  ClamAV kept patched. Heavy transcoding may offload to a managed service.
+- **Upload integrity (P0):** presigned PUT bound to a `Content-Length` range + content-type; after
+  complete, **HEAD the object** to verify real size/type before flipping to `SCANNING`/`READY`.
+- **Edge:** HTTPS + HSTS, exact-origin CORS with `Allow-Credentials`, CDN/WAF rate limiting.
+- **App:** helmet (CSP, no-sniff, frame-deny); Redis rate limiting layered **per-IP + per-account +
+  global** with correct `trust proxy`/XFF handling; CSRF double-submit on cookie routes; Zod validation;
+  **log redaction** (auth headers, cookies, `password`, `token`, any `*.amazonaws.com` query string —
+  presigned URLs are credentials).
+- **AuthN/Z:** argon2id passwords; asymmetric-signed JWT (15m) + rotating refresh with reuse detection;
+  RBAC + **centralized resource-ownership checks** (defense against IDOR); optional Postgres RLS later;
+  MFA/2FA on the roadmap.
+- **Shares:** ≥128-bit random tokens; argon2id + constant-time password check; aggressive verify
+  rate-limit/lockout; **atomic** download-limit enforcement.
+- **Data:** least-privilege Postgres role; parameterized Prisma; secrets in Render env groups / secrets
+  manager (not `.env` in prod); **AWS access via OIDC assume-role**, no static keys; PII retention policy
+  on `downloads`/`audit_logs`.
 - **Audit:** append-only `audit_logs` for sensitive actions.
 
 ---
 
-## 7. AWS / S3 Architecture
+## 7. AWS / S3 Architecture — hardened
 
-Single private bucket, prefix-namespaced:
+Single **private** bucket (Block Public Access ON), **Versioning ON** (protects against malicious/
+accidental delete), SSE at rest, prefix-namespaced:
 ```
 s3://dropvault-{env}/
 ├── users/{userId}/files/{fileId}/{version}
 ├── users/{userId}/thumbnails/{fileId}.webp
 ├── users/{userId}/avatars/{userId}.webp
-└── temp/{uploadSessionId}/
+└── temp/{uploadSessionId}/        # lifecycle: abort incomplete multipart after 1d, expire after 24h
 ```
-Block Public Access ON; SSE (S3 or KMS); CORS allowing PUT/GET from web origin; lifecycle rules
-(abort incomplete multipart after 1 day, expire `temp/` after 24h). Versioning optional.
-
-**Resumable multipart upload:** API `CreateMultipartUpload` → store UploadSession → presign each part →
-browser PUTs parts directly to S3 → resume by asking API which parts are missing →
-`CompleteMultipartUpload` → create files row + enqueue scan/thumbnail jobs.
-
-**Download:** API verifies ownership/share → `getSignedUrl(GetObject, {expiresIn: 300})`. Optional
-CloudFront + signed URLs for public/repeat assets.
-
-**Credentials:** local dev → MinIO via `.env` (gitignored). Prod → IAM least-privilege
-(`PutObject/GetObject/AbortMultipartUpload/ListMultipartUploadParts` on the bucket only).
+**CORS** allows PUT/GET from the web origin. **CloudFront** sits in front with **origin-access** to the
+private bucket; public/repeat assets use **signed URLs/cookies** so the CDN actually caches (raw
+presigned S3 URLs are per-request and uncacheable). Credentials: MinIO via `.env` locally; prod uses
+IAM least-privilege (`PutObject/GetObject/AbortMultipartUpload/ListMultipartUploadParts` on the bucket).
 
 ---
 
@@ -229,42 +204,41 @@ CloudFront + signed URLs for public/repeat assets.
 
 | Use | Key pattern | Notes |
 | --- | --- | --- |
-| Cache (cache-aside) | `cache:file:{id}`, `cache:folder:{id}:children`, `cache:share:{token}` | TTL 60–300s; invalidate on write |
-| Rate limiting | `rl:{ip|userId}:{route}` | sliding window, atomic INCR+EXPIRE |
+| Cache (cache-aside) | `cache:file:{id}`, `cache:folder:{id}:children`, `cache:share:{token}` | TTL 60–300s; invalidate on write. **Never** gate quota or share-limits through cache. |
+| Atomic counters | `share:{id}:downloads` | atomic limit enforcement for one-time/capped shares |
+| Rate limiting | `rl:{scope}:{id}:{route}` | per-IP + per-account + global, sliding window |
 | Token control | `revoked:refresh:{jti}` | force-logout denylist |
-| Queues (BullMQ) | `bull:{queue}:*` | thumbnail, scan, cleanup, rollup |
-| WebSocket fan-out | Socket.IO Redis adapter | any node reaches any client |
+| Analytics buffer | `q:analytics` | downloads/views enqueued + **batch-inserted async** (off the hot path) |
+| Queues (BullMQ) | `bull:{queue}:*` | image-thumb / video-transcode / scan / cleanup — separate queues + priorities |
+| WebSocket / SSE fan-out | Socket.IO Redis adapter | server→client "file ready" events (browser already knows its own upload progress) |
 
-Cache-aside with explicit invalidation on write. Quota enforcement reads Postgres, not cache.
-Redis treated as disposable — authoritative data lives in Postgres/S3.
+Redis is disposable — authoritative data lives in Postgres/S3.
 
 ---
 
 ## 9. Docker Architecture
 
-**Local `docker-compose.yml`:** postgres, redis, **minio** (S3-compatible), **mailhog** (email
-catcher), clamav, api (hot-reload), worker, web. One command brings up the whole stack offline.
-
-**Images:** multi-stage builds (deps→build→runtime), non-root user, production-only runtime deps.
-Separate `Dockerfile.api` / `Dockerfile.web`; worker reuses the api image with a different command.
-`HEALTHCHECK` + readiness endpoints.
-
-**Prod:** Render builds from Dockerfiles; real S3 + Resend instead of MinIO/Mailhog; secrets from
-Render env groups.
+**Local `docker-compose.yml`:** postgres, redis, **minio**, **mailhog**, clamav, api, worker, web —
+whole stack offline in one command. **Images:** multi-stage (deps→build→runtime), non-root, prod-only
+runtime deps, `HEALTHCHECK` + readiness; worker reuses the api image with a different command.
+**Prod:** Render builds from Dockerfiles; real S3 + Resend; secrets from Render env groups;
+**graceful shutdown** (SIGTERM drains HTTP, in-flight BullMQ jobs, and ws connections).
 
 ---
 
 ## 10. CI/CD Architecture (GitHub Actions)
 
-**ci.yml (PR & push):** install (pnpm cached) → lint → typecheck → `prisma validate` → test (vitest
-unit+integration against ephemeral postgres/redis service containers) → build → docker build (no push).
-Tasks parallelized via Turborepo task graph + remote cache.
+**ci.yml (PR & push):** install → lint → typecheck → `prisma validate` → test (vitest unit+integration
+on ephemeral postgres/redis; upload/download integration tests also run against a **throwaway real S3
+bucket** to catch MinIO↔S3 drift) → build → docker build (no push). Parallelized via Turborepo cache.
 
-**cd.yml (merge to main):** `prisma migrate deploy` (gated, first) → deploy api+worker to Render →
-deploy web to Vercel → smoke test `/health/ready` → notify.
+**cd.yml (merge to main):** **separate gated migration job** (Prisma takes an advisory lock; uses
+**expand/contract, backward-compatible** migrations so old pods survive the window) → deploy api+worker
+to Render → deploy web to Vercel → smoke `/health/ready` → notify. **AWS via OIDC assume-role**, secrets
+in GitHub Environments, manual approval gate on prod.
 
-Branch protection on `main` (CI + 1 review), GitHub Environments for secrets, separate staging/prod
-with manual approval on prod.
+**Migration workflow note:** raw-SQL objects (partial unique indexes, `CHECK`, GIN trigram, path index)
+are added with `prisma migrate dev --create-only` then hand-edited SQL; never `prisma db push`.
 
 ---
 
@@ -272,34 +246,49 @@ with manual approval on prod.
 
 | Concern | Strategy |
 | --- | --- |
+| Connection exhaustion | **PgBouncer (transaction mode)** in front of Postgres; capped Prisma pool; replicas for analytics later |
 | API throughput | stateless containers, horizontal scale behind LB |
 | Upload/download bandwidth | offloaded to S3 (direct browser↔S3) |
-| Download latency/egress | CloudFront CDN in front of S3 |
-| Heavy compute | dedicated worker tier scaled by queue depth |
-| DB reads | connection pooling; read replicas for analytics later |
-| Hot reads | Redis cache for metadata + share-token resolution |
-| Big tables | append-only + time partitioning; archive cold partitions |
-| Storage accounting | denormalized transactional counter, nightly reconciliation |
-| Real-time | Socket.IO Redis adapter |
+| Download caching | **CloudFront signed URLs/cookies** for public/repeat assets |
+| Hot writes | analytics **batch-inserted async**; `storageUsed` via reservation, not per-op SUM |
+| Heavy compute | sandboxed worker tier, **separate queues + priorities** (image vs video), autoscale by depth |
+| Big tables | append-only + monthly partitioning; UUIDv7 PKs for index locality |
+| Hot reads | Redis cache for metadata + share resolution |
+| Real-time | SSE/WS via Socket.IO Redis adapter (API tier only, never Vercel) |
 | Search growth | pg_trgm now → Meilisearch/OpenSearch later |
 | Cleanup | scheduled jobs purge expired sessions/shares/soft-deletes |
 
 ---
 
-## 12. Weaknesses & Improvements (honest review)
+## 12. Production Readiness (observability, reliability, DR)
 
-1. **Post-upload scanning gap** — file lands in S3 before ClamAV clears it; mitigated by QUARANTINED
-   gate. Improve: scan from a quarantine prefix, `CopyObject` to live prefix only after clean.
-2. **Logical (not physical) multi-tenant isolation** — enforced in app code; one missing ownership
-   check leaks data. Improve: centralized policy guard + Postgres RLS + cross-tenant tests.
-3. **No client-side / zero-knowledge encryption** — S3 encrypts at rest but DropVault can read files.
-   Roadmap item.
-4. **Filename-only search** — pg_trgm won't do content/ranked search. Document Meilisearch path.
-5. **Folder move cost** — materialized path rewrite is heavy for huge subtrees. Improve: background job.
-6. **storageUsed counter drift** — mitigate with nightly reconciliation job.
-7. **ClamAV operational weight** — memory-hungry, DB updates needed. Consider SaaS scan in prod.
-8. **Single-region** — no DR/multi-region in v1. Add S3 CRR + cross-region replica when needed.
-9. **WebSockets not on Vercel** — sockets live on the Render api tier, never Vercel.
+- **Observability:** Sentry (errors), OpenTelemetry traces, RED/USE metrics, structured Winston logs
+  with request-id correlation; SLOs + alerts.
+- **Job reliability:** BullMQ retries with backoff, **dead-letter queue**, **idempotent** handlers,
+  stalled-job recovery; a **stuck-file sweeper** flags/auto-fails files left in `UPLOADING`/`SCANNING`
+  past a threshold (so failures never go silent).
+- **Health semantics:** liveness has no external deps; readiness checks DB/Redis/S3 so a Redis blip
+  doesn't kill every pod.
+- **Backups / DR (P0):** Postgres automated backups + **PITR** with a *rehearsed* restore and defined
+  RPO/RTO; **S3 Versioning** + lifecycle; documented runbooks.
+- **Cost guardrails:** budget alerts on S3 egress, worker compute, Resend volume.
 
-**Deliberately not over-engineered in v1 (correctly):** no Kubernetes, no microservices, no
-event-sourcing, no multi-region. Modular monolith + worker is the right granularity for now.
+---
+
+## 13. Review findings → remediation roadmap
+
+Full review in chat history; sequencing:
+
+- **P0 (before real users):** cookieless content domain + download hardening; sandboxed worker;
+  DB backups/PITR + S3 Versioning + tested restore; atomic share-limit enforcement; presigned
+  size/type binding + HEAD verify; log redaction.
+- **P1 (before "production-grade"):** PgBouncer + connection budget; expand/contract + gated migration
+  job; `upload_parts` + reservation hotspot fixes; observability + dead-letter + stuck-file sweeper +
+  graceful shutdown; partial unique indexes; job idempotency/retries.
+- **P2 (scale & product depth):** CloudFront signed URLs; reconsider WS↔SSE; partitioning + UUIDv7
+  (UUIDv7 already in schema); collaboration ACLs, file versioning, trash lifecycle, MFA, billing tiers;
+  OIDC in CI; load testing + cost alerts.
+
+### Deliberate non-goals for v1 (correctly out of scope)
+No Kubernetes, no microservices, no event-sourcing, no multi-region, no client-side/zero-knowledge
+encryption. A modular monolith + sandboxed worker is the right granularity now.

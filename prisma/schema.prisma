@@ -1,0 +1,303 @@
+// DropVault — Prisma schema
+// PostgreSQL. Requires Prisma >= 6 (for uuid(7) time-ordered IDs).
+//
+// Conventions:
+//   - Tables are snake_case via @@map; columns keep Prisma camelCase (quoted in raw SQL).
+//   - UUIDv7 primary keys: time-ordered, so B-tree index locality stays good on high-insert tables.
+//   - Soft delete via `deletedAt`; uniqueness that must survive soft delete uses PARTIAL unique
+//     indexes added in a hand-edited migration (Prisma cannot express partial indexes declaratively).
+//   - Append-only tables (downloads, audit_logs) are designed for monthly RANGE partitioning later.
+//
+// Objects Prisma cannot express here (added via `prisma migrate dev --create-only` then raw SQL):
+//   1. CREATE UNIQUE INDEX "users_email_active_key"  ON "users" ("email") WHERE "deletedAt" IS NULL;
+//   2. CREATE UNIQUE INDEX "folders_name_active_key"
+//        ON "folders" ("userId", COALESCE("parentId", '00000000-0000-0000-0000-000000000000'), "name")
+//        WHERE "deletedAt" IS NULL;
+//   3. ALTER TABLE "shares" ADD CONSTRAINT "shares_one_target"
+//        CHECK (num_nonnulls("fileId", "folderId") = 1);
+//   4. CREATE INDEX "files_name_trgm_idx" ON "files" USING gin ("name" gin_trgm_ops);
+//   5. CREATE INDEX "folders_path_prefix_idx" ON "folders" ("path" text_pattern_ops);
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [citext, pg_trgm]
+}
+
+// ─────────────────────────────── Enums ───────────────────────────────
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum FileStatus {
+  UPLOADING // multipart in progress
+  SCANNING // bytes verified, awaiting virus scan + thumbnail
+  READY // clean & visible/downloadable
+  QUARANTINED // scan failed; not downloadable/shareable
+  FAILED // upload or processing failed
+}
+
+enum UploadStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  ABORTED
+  EXPIRED
+}
+
+enum ShareVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum VerificationTokenType {
+  EMAIL_VERIFY
+  PASSWORD_RESET
+}
+
+// ─────────────────────────────── Users ───────────────────────────────
+
+model User {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  email         String    @db.Citext // UNIQUE(email) WHERE deletedAt IS NULL — partial index in migration
+  passwordHash  String
+  name          String
+  avatarKey     String?
+  emailVerified Boolean   @default(false)
+  role          Role      @default(USER)
+  storageUsed   BigInt    @default(0) // committed bytes
+  storageReserved BigInt  @default(0) // bytes reserved by in-flight uploads (TOCTOU-safe quota)
+  storageQuota  BigInt    @default(10737418240) // 10 GiB
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  refreshTokens      RefreshToken[]
+  verificationTokens VerificationToken[]
+  folders            Folder[]
+  files              File[]
+  uploadSessions     UploadSession[]
+  shares             Share[]
+  auditLogs          AuditLog[]
+  downloads          Download[]          @relation("DownloadActor")
+
+  @@index([deletedAt])
+  @@map("users")
+}
+
+// ─────────────────────── Auth: refresh & verification ────────────────
+
+model RefreshToken {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  userId            String    @db.Uuid
+  tokenHash         String    @unique // sha-256 of the raw token; raw token never stored
+  familyId          String    @db.Uuid // rotation lineage; reuse → revoke whole family
+  replacedByTokenId String?   @unique @db.Uuid
+  userAgent         String?
+  ip                String?   @db.Inet
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  createdAt         DateTime  @default(now())
+
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBy RefreshToken? @relation("TokenRotation", fields: [replacedByTokenId], references: [id], onDelete: SetNull)
+  replaces   RefreshToken? @relation("TokenRotation")
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model VerificationToken {
+  id        String                @id @default(uuid(7)) @db.Uuid
+  userId    String                @db.Uuid
+  type      VerificationTokenType
+  tokenHash String                @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime              @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@map("verification_tokens")
+}
+
+// ─────────────────────────────── Folders ─────────────────────────────
+
+model Folder {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  userId    String    @db.Uuid
+  parentId  String?   @db.Uuid // null = root
+  name      String
+  path      String // materialized path, e.g. "/photos/2026/"
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent   Folder?  @relation("FolderTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children Folder[] @relation("FolderTree")
+  files    File[]
+  shares   Share[]
+
+  // UNIQUE(userId, parentId, name) WHERE deletedAt IS NULL — partial index in migration
+  // INDEX(path text_pattern_ops) for subtree prefix scans   — raw SQL in migration
+  @@index([userId, parentId])
+  @@index([userId, deletedAt])
+  @@map("folders")
+}
+
+// ──────────────────────────────── Files ──────────────────────────────
+
+model File {
+  id           String     @id @default(uuid(7)) @db.Uuid
+  userId       String     @db.Uuid
+  folderId     String?    @db.Uuid // null = root
+  name         String
+  originalName String
+  mimeType     String
+  size         BigInt
+  storageKey   String     @unique // S3 object key
+  checksum     String? // sha-256, computed by worker
+  status       FileStatus @default(UPLOADING)
+  thumbnailKey String?
+  version      Int        @default(1) // current version counter (full history is a roadmap item)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  deletedAt    DateTime?
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder        Folder?        @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  shares        Share[]
+  downloads     Download[]
+  uploadSession UploadSession?
+
+  // GIN trigram index on name for fuzzy search — raw SQL in migration
+  @@index([userId, folderId, deletedAt])
+  @@index([userId, deletedAt])
+  @@index([status])
+  @@map("files")
+}
+
+// ──────────────────── Resumable upload (multipart) ───────────────────
+
+model UploadSession {
+  id            String       @id @default(uuid(7)) @db.Uuid
+  userId        String       @db.Uuid
+  fileId        String?      @unique @db.Uuid // set on finalize
+  s3UploadId    String
+  storageKey    String
+  fileName      String
+  mimeType      String
+  totalSize     BigInt
+  reservedBytes BigInt // quota reserved for this upload
+  chunkSize     Int
+  totalParts    Int
+  status        UploadStatus @default(PENDING)
+  expiresAt     DateTime
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  file  File?        @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  parts UploadPart[]
+
+  @@index([userId])
+  @@index([status, expiresAt]) // cleanup job target
+  @@map("upload_sessions")
+}
+
+model UploadPart {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  sessionId  String   @db.Uuid
+  partNumber Int
+  etag       String
+  size       BigInt
+  createdAt  DateTime @default(now())
+
+  session UploadSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, partNumber]) // one row per part; no JSONB contention
+  @@index([sessionId])
+  @@map("upload_parts")
+}
+
+// ──────────────────────────────── Shares ─────────────────────────────
+
+model Share {
+  id            String          @id @default(uuid(7)) @db.Uuid
+  ownerId       String          @db.Uuid
+  fileId        String?         @db.Uuid
+  folderId      String?         @db.Uuid
+  token         String          @unique // >=128-bit random public slug
+  visibility    ShareVisibility @default(PUBLIC)
+  passwordHash  String? // argon2id; constant-time verify
+  expiresAt     DateTime?
+  maxDownloads  Int?
+  downloadCount Int             @default(0)
+  oneTime       Boolean         @default(false)
+  allowDownload Boolean         @default(true)
+  revokedAt     DateTime?
+  createdAt     DateTime        @default(now())
+
+  owner     User       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  file      File?      @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  folder    Folder?    @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  downloads Download[]
+
+  // CHECK (num_nonnulls(fileId, folderId) = 1) — exactly one target; raw SQL in migration
+  @@index([ownerId])
+  @@index([expiresAt])
+  @@map("shares")
+}
+
+// ───────────────────── Analytics (append-only) ───────────────────────
+
+model Download {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  fileId      String   @db.Uuid
+  shareId     String?  @db.Uuid
+  actorUserId String?  @db.Uuid
+  ip          String?  @db.Inet
+  userAgent   String?
+  country     String?
+  bytesServed BigInt   @default(0)
+  createdAt   DateTime @default(now())
+
+  file  File   @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  share Share? @relation(fields: [shareId], references: [id], onDelete: SetNull)
+  actor User?  @relation("DownloadActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([fileId, createdAt])
+  @@index([shareId])
+  @@index([createdAt]) // partition key candidate
+  @@map("downloads")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  actorUserId String?  @db.Uuid
+  action      String // e.g. "file.delete", "auth.login"
+  entityType  String
+  entityId    String?
+  ip          String?  @db.Inet
+  userAgent   String?
+  metadata    Json? // jsonb
+  createdAt   DateTime @default(now())
+
+  actor User? @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorUserId, createdAt])
+  @@index([entityType, entityId])
+  @@index([createdAt]) // partition key candidate
+  @@map("audit_logs")
+}
