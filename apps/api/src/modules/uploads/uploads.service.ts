@@ -6,9 +6,11 @@ import type {
   UploadInitResponse,
   UploadStatusResponse,
 } from '@dropvault/shared';
+import { env } from '../../config/env';
 import { AppError } from '../../utils/app-error';
 import { quota } from '../../services/quota.service';
 import { storage } from '../../services/storage.service';
+import { scanQueue, thumbnailQueue } from '../../queues';
 import { foldersRepository } from '../folders/folders.repository';
 import { filesRepository } from '../files/files.repository';
 import { toPublicFile } from '../files/files.service';
@@ -138,6 +140,7 @@ export const uploadsService = {
       throw AppError.badRequest('Uploaded size does not match the declared size');
     }
 
+    // With scanning on, the file stays SCANNING (not downloadable) until the worker clears it.
     const file = await filesRepository.create({
       userId,
       folderId: session.folderId,
@@ -146,13 +149,19 @@ export const uploadsService = {
       mimeType: session.mimeType,
       size: BigInt(head.size),
       storageKey: session.storageKey,
-      status: FileStatus.READY,
+      status: env.SCAN_ENABLED ? FileStatus.SCANNING : FileStatus.READY,
       version: 1,
     });
 
     await uploadsRepository.recordParts(session.id, parts);
     await uploadsRepository.updateStatus(session.id, UploadStatus.COMPLETED, file.id);
     await quota.commit(userId, head.size, Number(session.reservedBytes));
+
+    if (env.SCAN_ENABLED) {
+      await scanQueue.add('scan', { fileId: file.id });
+    } else if (file.mimeType.startsWith('image/')) {
+      await thumbnailQueue.add('thumbnail', { fileId: file.id });
+    }
 
     return toPublicFile(file);
   },

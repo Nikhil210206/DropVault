@@ -57,6 +57,16 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('true')
     .transform((v) => v === 'true'),
+
+  // ── Background processing (scan / thumbnails) ──
+  SCAN_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  // 'clamav' = real clamd over TCP (prod); 'eicar' = local EICAR-signature stub (dev/CI).
+  SCAN_PROVIDER: z.enum(['clamav', 'eicar']).default('eicar'),
+  CLAMAV_HOST: z.string().default('localhost'),
+  CLAMAV_PORT: z.coerce.number().int().positive().default(3310),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -48,9 +48,9 @@ to **learn while building**. Production-quality code, industry-standard architec
 | 3  | Backend Setup        | ✅ Complete & verified — migration applied, seeded, /health/ready=200 (db+redis up) |
 | 4  | Authentication       | ✅ Complete & verified — 10/10 tests + 13/13 e2e (register→verify→login→refresh/reuse→reset) |
 | 5  | File Upload System   | ✅ Complete & verified — 25/25 e2e (multipart→MinIO, download integrity, quota, resume, folders) |
-| 6  | File Sharing System  | ⬜                                        |
-| 7  | Frontend Development | ⬜                                        |
-| 8  | Advanced Features    | ⬜                                        |
+| 6  | File Sharing System  | ✅ Complete & verified — 18/18 e2e (public/password/one-time-atomic/capped/folder/revoke) |
+| 7  | Frontend Development | ✅ Complete & verified — `next build` passes (7 routes), typecheck+lint 3/3, prod server serves |
+| 8  | Advanced Features    | ✅ Complete & verified — 12/12 e2e (scan gate, thumbnails, realtime, cache) + cleanup job |
 | 9  | Testing              | ⬜                                        |
 | 10 | Docker               | ⬜                                        |
 | 11 | CI/CD                | ⬜                                        |
@@ -103,6 +103,28 @@ to **learn while building**. Production-quality code, industry-standard architec
 | Folder paths                 | materialized `path`; rename/delete rewrite descendants via `left("path", N::int)` (cast — Prisma sends numbers as bigint) | **Locked** |
 | File delete                  | soft-delete + quota subUsed; S3 object retained for trash (purge job in Phase 8) | **Locked** |
 | Listing                      | cursor pagination by `id desc` (uuid v7 ≈ time order); search via `contains` insensitive (trigram GIN) | **Locked** |
+| Shares: token                | 128-bit base64url, `@unique`; URL `${WEB_URL}/s/{token}`; all PUBLIC link-based (user-scoped PRIVATE = roadmap) | **Locked** |
+| Shares: limits               | atomic conditional UPDATE consumes a download (revoked/expired/allowDownload/maxDownloads checked in one statement) — race-safe one-time | **Locked** |
+| Shares: oneTime              | sugar for maxDownloads=1 at creation | **Locked** |
+| Shares: password             | argon2id; resolve hides filename until verified; `POST /verify` → short-lived EdDSA **grant** (aud `dropvault-share`, 15m); download requires grant | **Locked** |
+| Shares: routes               | owner routes authenticated; resolve/verify/download are PUBLIC (token is the secret); verify rate-limited 10/min | **Locked** |
+| Shares: folder               | resolve lists subtree files; download takes `?fileId=` validated within the shared folder's path subtree | **Locked** |
+| **Web stack**                | Next 15 (App Router) + React 19 + Tailwind 3.4 + hand-authored shadcn primitives + TanStack Query + Zustand + RHF + next-themes + sonner | **Locked** |
+| Web: auth/session            | access token in memory (Zustand, never localStorage); restored on load via refresh cookie; api-client refreshes once on 401 then retries | **Locked** |
+| Web: upload                  | resumable multipart client (XHR per part for progress) straight to S3; Zustand upload store + floating progress manager | **Locked** |
+| Web: shared types            | Next `transpilePackages: ['@dropvault/shared']`; forms reuse the shared Zod schemas via `@hookform/resolvers` | **Locked** |
+| Web: build note              | no `next/font` (avoids build-time font fetch); dark mode via `next-themes` class strategy | **Locked** |
+| Web: run                     | `pnpm --filter @dropvault/web dev` on :3000; needs API on :4000 (CORS already allows localhost:3000 + credentials) | **Locked** |
+| Queues                       | BullMQ (`scan`/`thumbnail`/`cleanup`); own conn options (`maxRetriesPerRequest: null`); separate `worker.ts` process (`pnpm --filter api worker`) | **Locked** |
+| Scan gate                    | `SCAN_ENABLED` → complete sets SCANNING + enqueues scan; clean→READY(+thumb), infected→QUARANTINED (delete obj + refund quota) | **Locked** |
+| Scanner                      | pluggable: `SCAN_PROVIDER=clamav` (clamd INSTREAM over TCP, prod) or `eicar` (local stub; **no arm64 ClamAV image**) | **Locked** |
+| Thumbnails                   | sharp → 400px WebP for `image/*`, after scan passes; worker must be sandboxed in prod (untrusted media) | **Locked** |
+| Realtime                     | Socket.IO + Redis adapter on API; worker emits via `@socket.io/redis-emitter` to `user:{id}` room (`file:updated`) | **Locked** |
+| Caching                      | cache-aside `cache.service` (best-effort); share-resolution cached 60s, invalidated on revoke | **Locked** |
+| Cleanup                      | hourly repeatable BullMQ job: expire stale upload sessions (+release), fail stuck files (>1h), purge soft-deleted (>30d) | **Locked** |
+
+### Running the full stack locally
+`docker compose up -d` → `pnpm --filter @dropvault/api dev` + `pnpm --filter @dropvault/api worker` + `pnpm --filter @dropvault/web dev`. SCAN_ENABLED defaults false in `.env.example` (works without worker); set true to exercise the gate.
 | Rate limiting resilience     | `failOpen()` wrapper — Redis outage allows requests (logged), never 500s the API | **Locked** |
 | Readiness checks             | `withTimeout(2s)` per dependency so probes report `down` instead of hanging | **Locked** |
 | BigInt serialization         | `BigInt.prototype.toJSON` → string (avoid >2^53 precision loss on byte counters) | **Locked** |

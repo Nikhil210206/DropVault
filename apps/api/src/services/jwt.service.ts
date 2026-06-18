@@ -54,3 +54,27 @@ export async function verifyAccessToken(token: string): Promise<AccessTokenClaim
     email: typeof payload.email === 'string' ? payload.email : '',
   };
 }
+
+const SHARE_AUDIENCE = 'dropvault-share';
+
+/** Short-lived grant proving a share password was verified (separate audience from access tokens). */
+export async function signShareGrant(shareId: string): Promise<string> {
+  const { privateKey } = await getKeys();
+  return new SignJWT({ sid: shareId })
+    .setProtectedHeader({ alg: ALG, kid: env.JWT_KID })
+    .setIssuer(env.JWT_ISSUER)
+    .setAudience(SHARE_AUDIENCE)
+    .setIssuedAt()
+    .setExpirationTime('15m')
+    .sign(privateKey);
+}
+
+/** Returns the share id the grant authorizes, or '' if invalid/expired. */
+export async function verifyShareGrant(token: string): Promise<string> {
+  const { publicKey } = await getKeys();
+  const { payload } = await jwtVerify(token, publicKey, {
+    issuer: env.JWT_ISSUER,
+    audience: SHARE_AUDIENCE,
+  });
+  return typeof payload.sid === 'string' ? payload.sid : '';
+}

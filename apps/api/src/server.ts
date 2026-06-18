@@ -1,9 +1,11 @@
 import { createServer } from 'node:http';
 import { createApp } from './app';
+import { attachSocket } from './realtime/socket';
 import { env, logger, disconnectPrisma, disconnectRedis } from './config';
 
 const app = createApp();
 const server = createServer(app);
+const io = attachSocket(server);
 
 server.listen(env.PORT, () => {
   logger.info('DropVault API listening', {
@@ -22,6 +24,7 @@ async function shutdown(signal: string): Promise<void> {
   logger.info(`Received ${signal}, shutting down gracefully`);
 
   // Stop accepting new connections, then drain and release resources.
+  void io.close();
   server.close(() => {
     void (async () => {
       try {

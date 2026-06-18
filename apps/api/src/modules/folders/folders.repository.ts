@@ -12,4 +12,12 @@ export const foldersRepository = {
     }),
 
   create: (data: Prisma.FolderUncheckedCreateInput) => prisma.folder.create({ data }),
+
+  /** Ids of a folder and all its live descendants, via the materialized path prefix. */
+  subtreeFolderIds: (userId: string, pathPrefix: string) =>
+    prisma.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "folders"
+      WHERE "userId" = ${userId}::uuid
+        AND left("path", ${pathPrefix.length}::int) = ${pathPrefix}
+        AND "deletedAt" IS NULL`,
 };

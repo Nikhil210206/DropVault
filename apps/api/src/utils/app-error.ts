@@ -35,6 +35,9 @@ export class AppError extends Error {
   static conflict(message = 'Conflict'): AppError {
     return new AppError(409, ErrorCode.CONFLICT, message);
   }
+  static gone(message = 'No longer available'): AppError {
+    return new AppError(410, ErrorCode.GONE, message);
+  }
   static payloadTooLarge(message = 'Payload too large'): AppError {
     return new AppError(413, ErrorCode.PAYLOAD_TOO_LARGE, message);
   }

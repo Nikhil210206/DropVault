@@ -1,3 +1,4 @@
+import type { Readable } from 'node:stream';
 import {
   CreateMultipartUploadCommand,
   UploadPartCommand,
@@ -6,6 +7,7 @@ import {
   ListPartsCommand,
   HeadObjectCommand,
   GetObjectCommand,
+  PutObjectCommand,
   DeleteObjectCommand,
   CopyObjectCommand,
   type CompletedPart,
@@ -100,6 +102,21 @@ export const storage = {
       }),
       { expiresIn: opts.expiresIn ?? 300 },
     );
+  },
+
+  /** Download an object fully into memory (used by the scan/thumbnail workers). */
+  async getObjectBuffer(key: string): Promise<Buffer> {
+    const out = await s3.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }));
+    const stream = out.Body as Readable;
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
+    }
+    return Buffer.concat(chunks);
+  },
+
+  putObject(key: string, body: Buffer, contentType: string) {
+    return s3.send(new PutObjectCommand({ Bucket: S3_BUCKET, Key: key, Body: body, ContentType: contentType }));
   },
 
   deleteObject(key: string) {
