@@ -4,10 +4,12 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
-    // Integration tests hit live Postgres/Redis; run files sequentially to avoid
-    // cross-test interference on shared infrastructure.
+    // Create + migrate an isolated test DB once; truncate + flush Redis before each test.
+    globalSetup: ['./vitest.global-setup.ts'],
+    setupFiles: ['./vitest.setup.ts'],
+    // Tests share one test DB and reset between cases, so run files sequentially.
     fileParallelism: false,
-    hookTimeout: 20_000,
-    testTimeout: 20_000,
+    hookTimeout: 30_000,
+    testTimeout: 30_000,
   },
 });

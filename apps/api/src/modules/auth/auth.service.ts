@@ -8,6 +8,7 @@ import type {
 } from '@dropvault/shared';
 
 import { env } from '../../config/env';
+import { logger } from '../../config/logger';
 import { AppError } from '../../utils/app-error';
 import { hashPassword, verifyPassword } from '../../utils/password';
 import { generateToken, hashToken } from '../../utils/tokens';
@@ -72,7 +73,10 @@ async function sendVerificationEmail(user: User): Promise<void> {
     tokenHash: hashToken(raw),
     expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
   });
-  await mailer.send(user.email, verificationEmail(`${env.WEB_URL}/verify-email?token=${raw}`));
+  // Best-effort: an email outage must not block signup (user can request a resend).
+  await mailer
+    .send(user.email, verificationEmail(`${env.WEB_URL}/verify-email?token=${raw}`))
+    .catch((e: unknown) => logger.warn('Verification email failed', { err: String(e) }));
 }
 
 export const authService = {
@@ -154,7 +158,9 @@ export const authService = {
       tokenHash: hashToken(raw),
       expiresAt: new Date(Date.now() + 60 * 60 * 1000),
     });
-    await mailer.send(user.email, passwordResetEmail(`${env.WEB_URL}/reset-password?token=${raw}`));
+    await mailer
+      .send(user.email, passwordResetEmail(`${env.WEB_URL}/reset-password?token=${raw}`))
+      .catch((e: unknown) => logger.warn('Password-reset email failed', { err: String(e) }));
   },
 
   async resetPassword(rawToken: string, newPassword: string): Promise<void> {

@@ -51,7 +51,7 @@ to **learn while building**. Production-quality code, industry-standard architec
 | 6  | File Sharing System  | ✅ Complete & verified — 18/18 e2e (public/password/one-time-atomic/capped/folder/revoke) |
 | 7  | Frontend Development | ✅ Complete & verified — `next build` passes (7 routes), typecheck+lint 3/3, prod server serves |
 | 8  | Advanced Features    | ✅ Complete & verified — 12/12 e2e (scan gate, thumbnails, realtime, cache) + cleanup job |
-| 9  | Testing              | ⬜                                        |
+| 9  | Testing              | ✅ Complete & verified — 29 tests (api 24 + web 5), isolated test DB, all green |
 | 10 | Docker               | ⬜                                        |
 | 11 | CI/CD                | ⬜                                        |
 | 12 | Deployment           | ⬜                                        |
@@ -122,6 +122,12 @@ to **learn while building**. Production-quality code, industry-standard architec
 | Realtime                     | Socket.IO + Redis adapter on API; worker emits via `@socket.io/redis-emitter` to `user:{id}` room (`file:updated`) | **Locked** |
 | Caching                      | cache-aside `cache.service` (best-effort); share-resolution cached 60s, invalidated on revoke | **Locked** |
 | Cleanup                      | hourly repeatable BullMQ job: expire stale upload sessions (+release), fail stuck files (>1h), purge soft-deleted (>30d) | **Locked** |
+
+| Testing infra                | Vitest; isolated **`dropvault_test`** DB + **Redis logical DB 1**; globalSetup creates+migrates (uses `pg`); `resetDb()` truncates + flushdb `beforeEach` | **Locked** |
+| Test env                     | `apps/api/.env.test` (gitignored) overrides DB/Redis/SCAN_ENABLED=false/RATE_LIMIT_MAX; derived from `.env`; CI must supply it | **Locked** |
+| Test coverage                | api: auth, folders, shares, quota (integration via supertest on test DB) + scanner/crypto (unit); web: utils + Button (RTL/jsdom) | **Locked** |
+| Email                        | verification/reset emails are **best-effort** (logged, never block signup/reset) | **Locked** |
+| Run tests                    | `pnpm test` (turbo) — needs Postgres+Redis up; api globalSetup auto-creates the test DB | **Locked** |
 
 ### Running the full stack locally
 `docker compose up -d` → `pnpm --filter @dropvault/api dev` + `pnpm --filter @dropvault/api worker` + `pnpm --filter @dropvault/web dev`. SCAN_ENABLED defaults false in `.env.example` (works without worker); set true to exercise the gate.

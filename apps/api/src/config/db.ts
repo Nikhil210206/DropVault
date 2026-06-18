@@ -4,7 +4,8 @@ import { logger } from './logger';
 
 const createPrisma = (): PrismaClient =>
   new PrismaClient({
-    log: env.isDevelopment ? ['warn', 'error'] : ['error'],
+    // Quiet in tests (expected constraint violations are asserted, not bugs).
+    log: env.isTest ? [] : env.isDevelopment ? ['warn', 'error'] : ['error'],
   });
 
 // Reuse a single client across hot-reloads in dev to avoid exhausting DB connections.
