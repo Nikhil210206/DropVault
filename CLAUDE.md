@@ -47,7 +47,7 @@ to **learn while building**. Production-quality code, industry-standard architec
 | 2  | Database Design      | ✅ Approved (schema + raw-SQL migration)  |
 | 3  | Backend Setup        | ✅ Complete & verified — migration applied, seeded, /health/ready=200 (db+redis up) |
 | 4  | Authentication       | ✅ Complete & verified — 10/10 tests + 13/13 e2e (register→verify→login→refresh/reuse→reset) |
-| 5  | File Upload System   | ⬜                                        |
+| 5  | File Upload System   | ✅ Complete & verified — 25/25 e2e (multipart→MinIO, download integrity, quota, resume, folders) |
 | 6  | File Sharing System  | ⬜                                        |
 | 7  | Frontend Development | ⬜                                        |
 | 8  | Advanced Features    | ⬜                                        |
@@ -96,6 +96,13 @@ to **learn while building**. Production-quality code, industry-standard architec
 | Enumeration                  | forgot-password always 200; login uniform; register returns 409 (accepted tradeoff) | **Locked** |
 | Validation                   | `validate()` middleware; body/params mutated, query → `req.validatedQuery` (Express 5 query is read-only) | **Locked** |
 | Testing                      | Vitest (unit: argon2/jwt/tokens) + supertest integration (live DB) flow test; full test-DB isolation deferred to Phase 9 | **Locked** |
+| Uploads: model               | S3/MinIO **multipart**, presigned UploadPart URLs (browser→S3 direct); **S3 ListParts is source of truth** for resume/complete | **Locked** |
+| Uploads: integrity           | HEAD-verify assembled object size vs declared at complete; reject mismatch (delete + release) | **Locked** |
+| Quota                        | atomic reserve(init)/commit(complete)/release(abort) + addUsed(copy)/subUsed(delete) via conditional `$executeRaw` | **Locked** |
+| Storage keys                 | `users/{userId}/files/{randomUUID}/source` (opaque; not the file's PK) | **Locked** |
+| Folder paths                 | materialized `path`; rename/delete rewrite descendants via `left("path", N::int)` (cast — Prisma sends numbers as bigint) | **Locked** |
+| File delete                  | soft-delete + quota subUsed; S3 object retained for trash (purge job in Phase 8) | **Locked** |
+| Listing                      | cursor pagination by `id desc` (uuid v7 ≈ time order); search via `contains` insensitive (trigram GIN) | **Locked** |
 | Rate limiting resilience     | `failOpen()` wrapper — Redis outage allows requests (logged), never 500s the API | **Locked** |
 | Readiness checks             | `withTimeout(2s)` per dependency so probes report `down` instead of hanging | **Locked** |
 | BigInt serialization         | `BigInt.prototype.toJSON` → string (avoid >2^53 precision loss on byte counters) | **Locked** |

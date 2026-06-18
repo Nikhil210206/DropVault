@@ -146,9 +146,10 @@ model Folder {
 
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   parent   Folder?  @relation("FolderTree", fields: [parentId], references: [id], onDelete: Cascade)
-  children Folder[] @relation("FolderTree")
-  files    File[]
-  shares   Share[]
+  children       Folder[]        @relation("FolderTree")
+  files          File[]
+  shares         Share[]
+  uploadSessions UploadSession[]
 
   // UNIQUE(userId, parentId, name) WHERE deletedAt IS NULL — partial index in migration
   // INDEX(path text_pattern_ops) for subtree prefix scans   — raw SQL in migration
@@ -195,6 +196,7 @@ model UploadSession {
   id            String       @id @default(uuid(7)) @db.Uuid
   userId        String       @db.Uuid
   fileId        String?      @unique @db.Uuid // set on finalize
+  folderId      String?      @db.Uuid // destination folder (null = root)
   s3UploadId    String
   storageKey    String
   fileName      String
@@ -208,9 +210,10 @@ model UploadSession {
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
-  user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  file  File?        @relation(fields: [fileId], references: [id], onDelete: SetNull)
-  parts UploadPart[]
+  user   User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  file   File?        @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  folder Folder?      @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  parts  UploadPart[]
 
   @@index([userId])
   @@index([status, expiresAt]) // cleanup job target

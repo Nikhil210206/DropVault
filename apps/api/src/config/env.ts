@@ -45,6 +45,18 @@ const envSchema = z.object({
   SMTP_HOST: z.string().default('localhost'),
   SMTP_PORT: z.coerce.number().int().positive().default(1025),
   RESEND_API_KEY: z.string().optional(),
+
+  // ── Object storage (S3 / MinIO) ──
+  S3_ENDPOINT: z.string().url(),
+  S3_REGION: z.string().default('us-east-1'),
+  S3_BUCKET: z.string().min(1),
+  S3_ACCESS_KEY_ID: z.string().min(1),
+  S3_SECRET_ACCESS_KEY: z.string().min(1),
+  // z.coerce.boolean treats any non-empty string as true, so parse explicitly.
+  S3_FORCE_PATH_STYLE: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
 });
 
 const parsed = envSchema.safeParse(process.env);
