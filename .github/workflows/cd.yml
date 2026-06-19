@@ -1,8 +1,12 @@
 name: CD
 
+# Manual until production secrets are configured (DATABASE_URL, RENDER_DEPLOY_HOOK_*,
+# VERCEL_*, PRODUCTION_API_URL). Run from the Actions tab → CD → "Run workflow".
+# To re-enable auto-deploy, uncomment the `push` trigger below.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch: {}
+  # push:
+  #   branches: [main]
 
 concurrency:
   group: cd-production

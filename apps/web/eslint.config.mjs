@@ -1,13 +1,4 @@
-import globals from 'globals';
-import base from '@dropvault/config-eslint/base';
+import web from '@dropvault/config-eslint/web';
 
-/** Web lint: shared base + browser globals. Ignores Next build output. */
-export default [
-  { ignores: ['.next/**', 'next-env.d.ts'] },
-  ...base,
-  {
-    languageOptions: {
-      globals: { ...globals.browser },
-    },
-  },
-];
+/** Web lint: shared config (with browser/node globals) + ignore Next build output. */
+export default [{ ignores: ['.next/**', 'next-env.d.ts'] }, ...web];

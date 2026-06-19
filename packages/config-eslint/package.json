@@ -6,7 +6,8 @@
   "main": "./base.js",
   "exports": {
     "./base": "./base.js",
-    "./node": "./node.js"
+    "./node": "./node.js",
+    "./web": "./web.js"
   },
   "dependencies": {
     "@eslint/js": "^9.18.0",
