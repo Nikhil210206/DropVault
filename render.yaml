@@ -1,0 +1,95 @@
+# Render Blueprint — provisions the API, worker, managed Postgres, and Redis.
+# Deploy: push to GitHub, then in Render: New → Blueprint → pick this repo.
+# Secrets (sync: false) are entered once in the Render dashboard after the first apply.
+
+databases:
+  - name: dropvault-postgres
+    plan: basic-256mb
+    postgresMajorVersion: "17"
+
+envVarGroups:
+  # Shared config + secrets (connection strings are added per-service below).
+  - name: dropvault-shared
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: API_PREFIX
+        value: /api/v1
+      - key: TRUST_PROXY
+        value: 1
+      - key: JWT_KID
+        value: prod-1
+      - key: S3_FORCE_PATH_STYLE
+        value: false
+      - key: MAIL_TRANSPORT
+        value: resend
+      - key: SCAN_ENABLED
+        value: false # set true only with a ClamAV service reachable at CLAMAV_HOST
+      # ── Secrets: set these in the Render dashboard (sync: false) ──
+      - key: CORS_ORIGINS # e.g. https://app.dropvault.com
+        sync: false
+      - key: WEB_URL # e.g. https://app.dropvault.com
+        sync: false
+      - key: JWT_PRIVATE_KEY # base64 PEM (see DEPLOYMENT.md)
+        sync: false
+      - key: JWT_PUBLIC_KEY
+        sync: false
+      - key: S3_ENDPOINT # https://s3.us-east-1.amazonaws.com
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: MAIL_FROM # "DropVault <no-reply@dropvault.com>"
+        sync: false
+
+services:
+  - type: keyvalue
+    name: dropvault-redis
+    plan: starter
+    ipAllowList: [] # reachable only from Render services
+    maxmemoryPolicy: noeviction
+
+  - type: web
+    name: dropvault-api
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile.api
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /health/ready
+    autoDeploy: true
+    # Apply migrations (expand/contract) before the new version goes live.
+    preDeployCommand: pnpm prisma migrate deploy
+    envVars:
+      - fromGroup: dropvault-shared
+      - key: DATABASE_URL
+        fromDatabase: { name: dropvault-postgres, property: connectionString }
+      - key: DIRECT_URL
+        fromDatabase: { name: dropvault-postgres, property: connectionString }
+      - key: REDIS_URL
+        fromService: { type: keyvalue, name: dropvault-redis, property: connectionString }
+
+  - type: worker
+    name: dropvault-worker
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile.api
+    dockerContext: .
+    dockerCommand: node apps/api/dist/worker.js
+    plan: starter
+    autoDeploy: true
+    envVars:
+      - fromGroup: dropvault-shared
+      - key: DATABASE_URL
+        fromDatabase: { name: dropvault-postgres, property: connectionString }
+      - key: DIRECT_URL
+        fromDatabase: { name: dropvault-postgres, property: connectionString }
+      - key: REDIS_URL
+        fromService: { type: keyvalue, name: dropvault-redis, property: connectionString }

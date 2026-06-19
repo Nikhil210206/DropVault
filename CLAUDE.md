@@ -54,7 +54,7 @@ to **learn while building**. Production-quality code, industry-standard architec
 | 9  | Testing              | ✅ Complete & verified — 29 tests (api 24 + web 5), isolated test DB, all green |
 | 10 | Docker               | ✅ Complete & verified — api+web images build & run (api /health/ready 200, web serves) |
 | 11 | CI/CD                | ✅ Complete & verified — ci.yml + cd.yml pass actionlint (0 findings) |
-| 12 | Deployment           | ⬜                                        |
+| 12 | Deployment           | ✅ Complete — render.yaml + AWS policies + Vercel + prod env + DEPLOYMENT.md runbook (validated) |
 
 ## Decision log
 
@@ -142,6 +142,12 @@ to **learn while building**. Production-quality code, industry-standard architec
 
 | **UI design system**         | **Enterprise / restrained** (Linear/Stripe/Dropbox sensibility): calm neutral palette + single indigo accent, premium spacing, hairline borders, soft layered shadows. **Glass only on the sticky topbar + overlays** (no aurora). `BrandBackdrop` (subtle static glow) only on auth/share pages. HSL tokens w/ `<alpha-value>` | **Locked** |
 | UI specifics                 | solid (not gradient) `Button`; file explorer is **list-first (table style) + grid toggle + search** with loading/empty/error states; subtle type-tinted icons (`lib/file-visual.ts`); responsive shell (desktop `Sidebar`, mobile `MobileNav` drawer via `Topbar`) | **Locked** |
+
+| Deployment target            | Vercel (web) · Render (api+worker, `render.yaml` Blueprint) · Render Postgres+Redis · AWS S3 · Resend | **Locked** |
+| Deploy artifacts             | `render.yaml`, `apps/web/vercel.json`, `docs/aws/{s3-cors,iam-policy,bucket-policy}.json`, `apps/api/.env.production.example`, `docs/DEPLOYMENT.md` | **Locked** |
+| Prod cookie note             | refresh cookie is `SameSite=None;Secure` in prod → host web+api on one root domain (`app.`/`api.dropvault.com`) so it's first-party (Safari-safe) | **Locked** |
+
+> **All 12 phases complete.** The platform is built, tested (29 tests), containerized, CI/CD-wired, and deployment-documented.
 
 ### Running the full stack locally
 `docker compose up -d` → `pnpm --filter @dropvault/api dev` + `pnpm --filter @dropvault/api worker` + `pnpm --filter @dropvault/web dev`. SCAN_ENABLED defaults false in `.env.example` (works without worker); set true to exercise the gate.
