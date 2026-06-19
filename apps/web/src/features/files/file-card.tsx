@@ -12,7 +12,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { cn, formatBytes, formatDate } from '@/lib/utils';
+import { cn, formatBytes } from '@/lib/utils';
 import { fileVisual } from '@/lib/file-visual';
 import { ApiError } from '@/lib/api-client';
 import { ShareDialog } from '@/features/share/share-dialog';
@@ -25,9 +25,9 @@ interface Props {
   onCopy: () => void;
 }
 
-export function FileRow({ file, onRename, onDelete, onCopy }: Props) {
+export function FileCard({ file, onRename, onDelete, onCopy }: Props) {
   const [shareOpen, setShareOpen] = useState(false);
-  const { Icon, color } = fileVisual(file.mimeType, file.name);
+  const { Icon, color, tint } = fileVisual(file.mimeType, file.name);
   const ready = file.status === 'READY';
 
   async function download() {
@@ -45,32 +45,25 @@ export function FileRow({ file, onRename, onDelete, onCopy }: Props) {
   }
 
   return (
-    <div className="group flex items-center gap-3 border-b border-border px-4 py-2.5 transition-colors last:border-0 hover:bg-muted/50">
+    <div className="group relative rounded-xl border border-border bg-card p-3 transition-all hover:border-foreground/20 hover:shadow-sm">
       <button
         type="button"
         onClick={download}
         disabled={!ready}
-        className="flex min-w-0 flex-1 items-center gap-3 text-left disabled:cursor-default"
+        className="block w-full text-left disabled:cursor-default"
         title={ready ? 'Download' : 'Processing…'}
       >
-        <Icon className={cn('h-5 w-5 shrink-0', color)} strokeWidth={1.75} />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium">{file.name}</span>
-          <span className="block text-xs text-muted-foreground sm:hidden">
-            {ready ? `${formatBytes(file.size)} · ${formatDate(file.createdAt)}` : 'Processing…'}
-          </span>
-        </span>
+        <div className={cn('mb-3 flex aspect-[4/3] items-center justify-center rounded-lg', tint)}>
+          <Icon className={cn('h-8 w-8', color)} strokeWidth={1.5} />
+        </div>
+        <p className="truncate text-sm font-medium">{file.name}</p>
+        <p className="text-xs text-muted-foreground">{ready ? formatBytes(file.size) : 'Processing…'}</p>
       </button>
-      <span className="hidden w-24 shrink-0 text-right text-sm tabular-nums text-muted-foreground sm:block">
-        {ready ? formatBytes(file.size) : '—'}
-      </span>
-      <span className="hidden w-32 shrink-0 text-right text-sm text-muted-foreground md:block">
-        {formatDate(file.createdAt)}
-      </span>
-      <div className="w-9 shrink-0 text-right opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 [&:has([data-state=open])]:opacity-100">
+
+      <div className="absolute right-2.5 top-2.5 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 [&:has([data-state=open])]:opacity-100">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="File actions">
+            <Button variant="outline" size="icon" className="h-7 w-7" aria-label="File actions">
               <MoreHorizontal className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
@@ -94,6 +87,7 @@ export function FileRow({ file, onRename, onDelete, onCopy }: Props) {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
       <ShareDialog open={shareOpen} onOpenChange={setShareOpen} fileId={file.id} targetName={file.name} />
     </div>
   );

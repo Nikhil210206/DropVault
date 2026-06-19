@@ -52,8 +52,8 @@ to **learn while building**. Production-quality code, industry-standard architec
 | 7  | Frontend Development | ✅ Complete & verified — `next build` passes (7 routes), typecheck+lint 3/3, prod server serves |
 | 8  | Advanced Features    | ✅ Complete & verified — 12/12 e2e (scan gate, thumbnails, realtime, cache) + cleanup job |
 | 9  | Testing              | ✅ Complete & verified — 29 tests (api 24 + web 5), isolated test DB, all green |
-| 10 | Docker               | ⬜                                        |
-| 11 | CI/CD                | ⬜                                        |
+| 10 | Docker               | ✅ Complete & verified — api+web images build & run (api /health/ready 200, web serves) |
+| 11 | CI/CD                | ✅ Complete & verified — ci.yml + cd.yml pass actionlint (0 findings) |
 | 12 | Deployment           | ⬜                                        |
 
 ## Decision log
@@ -128,6 +128,20 @@ to **learn while building**. Production-quality code, industry-standard architec
 | Test coverage                | api: auth, folders, shares, quota (integration via supertest on test DB) + scanner/crypto (unit); web: utils + Button (RTL/jsdom) | **Locked** |
 | Email                        | verification/reset emails are **best-effort** (logged, never block signup/reset) | **Locked** |
 | Run tests                    | `pnpm test` (turbo) — needs Postgres+Redis up; api globalSetup auto-creates the test DB | **Locked** |
+
+| Docker: web                  | `docker/Dockerfile.web` — multi-stage, **Next `output: standalone`** (slim ~455 MB); `NEXT_PUBLIC_API_URL` is a build ARG | **Locked** |
+| Docker: api                  | `docker/Dockerfile.api` — multi-stage; build bundles via tsup + `prisma generate`; one image runs server OR worker (command override) | **Locked** |
+| Docker: api size             | ~1.78 GB (runner copies whole built workspace for reliability). **Slim follow-up**: `pnpm deploy --prod` / prune devDeps (mind the generated Prisma client) | **Known** |
+| Docker: prod compose         | `docker/docker-compose.prod.yml` builds api/worker/web + Postgres/Redis/MinIO; `migrate` one-shot runs `prisma migrate deploy` before api; needs `docker/.env` with JWT keys | **Locked** |
+| Docker: secrets              | `.dockerignore` excludes all `.env*` (no secrets baked in); runtime env via compose/Render | **Locked** |
+
+| CI (`ci.yml`)                | PR+push: `quality` (lint/typecheck/build) · `test` (Postgres+Redis services, ephemeral JWT keys, generated `.env.test`) · `docker` build-check (push only) | **Locked** |
+| CD (`cd.yml`)                | push→main: `migrate` (prisma migrate deploy) → `deploy-api` (Render deploy hooks) + `deploy-web` (Vercel CLI) → `smoke` (/health/ready); `environment: production` gate | **Locked** |
+| CD secrets needed            | `DATABASE_URL`/`DIRECT_URL`, `RENDER_DEPLOY_HOOK_API`/`_WORKER`, `VERCEL_TOKEN`/`_ORG_ID`/`_PROJECT_ID`, `PRODUCTION_API_URL` | **Reference** |
+| Verified via                 | `actionlint` (Docker) — 0 findings on both workflows | **Locked** |
+
+| **UI design system**         | **Enterprise / restrained** (Linear/Stripe/Dropbox sensibility): calm neutral palette + single indigo accent, premium spacing, hairline borders, soft layered shadows. **Glass only on the sticky topbar + overlays** (no aurora). `BrandBackdrop` (subtle static glow) only on auth/share pages. HSL tokens w/ `<alpha-value>` | **Locked** |
+| UI specifics                 | solid (not gradient) `Button`; file explorer is **list-first (table style) + grid toggle + search** with loading/empty/error states; subtle type-tinted icons (`lib/file-visual.ts`); responsive shell (desktop `Sidebar`, mobile `MobileNav` drawer via `Topbar`) | **Locked** |
 
 ### Running the full stack locally
 `docker compose up -d` → `pnpm --filter @dropvault/api dev` + `pnpm --filter @dropvault/api worker` + `pnpm --filter @dropvault/web dev`. SCAN_ENABLED defaults false in `.env.example` (works without worker); set true to exercise the gate.

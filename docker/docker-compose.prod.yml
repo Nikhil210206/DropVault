@@ -1,0 +1,141 @@
+name: dropvault-prod
+
+# Self-host / demo production stack: builds the API, worker, and web images and runs them
+# with Postgres, Redis, and MinIO. In real production, Postgres/Redis/S3 are managed services
+# and the API/worker/web run on Render + Vercel.
+#
+#   1. Put JWT keys in docker/.env (JWT_PRIVATE_KEY=..., JWT_PUBLIC_KEY=...; base64 PEM).
+#   2. docker compose -f docker/docker-compose.prod.yml up --build
+
+x-api-env: &api-env
+  NODE_ENV: production
+  PORT: 4000
+  API_PREFIX: /api/v1
+  DATABASE_URL: postgresql://dropvault:dropvault@postgres:5432/dropvault?schema=public
+  DIRECT_URL: postgresql://dropvault:dropvault@postgres:5432/dropvault?schema=public
+  REDIS_URL: redis://redis:6379
+  CORS_ORIGINS: http://localhost:3000
+  TRUST_PROXY: 1
+  S3_ENDPOINT: http://minio:9000
+  S3_REGION: us-east-1
+  S3_BUCKET: dropvault-local
+  S3_ACCESS_KEY_ID: minioadmin
+  S3_SECRET_ACCESS_KEY: minioadmin
+  S3_FORCE_PATH_STYLE: "true"
+  SCAN_ENABLED: "true"
+  SCAN_PROVIDER: eicar
+  MAIL_TRANSPORT: smtp
+  SMTP_HOST: mailpit
+  SMTP_PORT: 1025
+  WEB_URL: http://localhost:3000
+  JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY}
+  JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dropvault
+      POSTGRES_PASSWORD: dropvault
+      POSTGRES_DB: dropvault
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dropvault -d dropvault"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done &&
+      mc mb --ignore-existing local/dropvault-local &&
+      echo 'bucket ready'"
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+
+  # One-shot: apply migrations before the API starts.
+  migrate:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    command: ["pnpm", "prisma", "migrate", "deploy"]
+    environment: *api-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    command: ["node", "apps/api/dist/server.js"]
+    environment: *api-env
+    ports:
+      - "4000:4000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    command: ["node", "apps/api/dist/worker.js"]
+    environment: *api-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:4000/api/v1
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

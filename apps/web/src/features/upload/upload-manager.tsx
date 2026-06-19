@@ -11,8 +11,8 @@ export function UploadManager() {
   if (items.length === 0) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-40 w-80 rounded-xl border bg-card shadow-lg">
-      <div className="flex items-center justify-between border-b px-4 py-2">
+    <div className="fixed bottom-4 right-4 z-40 w-80 overflow-hidden rounded-xl border border-border bg-card shadow-lg animate-fade-up">
+      <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
         <span className="text-sm font-medium">Uploads</span>
         <Button variant="ghost" size="icon" onClick={clearFinished} aria-label="Clear finished">
           <X className="h-4 w-4" />

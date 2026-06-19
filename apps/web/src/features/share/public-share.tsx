@@ -1,18 +1,32 @@
 'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
-import { Download, FileIcon, Folder, Loader2, Lock } from 'lucide-react';
+import { Download, FileIcon, Folder, HardDrive, Loader2, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import type { ShareResolution, ShareTargetDetails, ShareVerifyResponse } from '@dropvault/shared';
 import { apiFetch, ApiError } from '@/lib/api-client';
+import { BrandBackdrop } from '@/components/brand-backdrop';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatBytes } from '@/lib/utils';
 
-function Centered({ children }: { children: ReactNode }) {
-  return <main className="flex min-h-screen items-center justify-center bg-muted/30 p-4">{children}</main>;
+function Shell({ children }: { children: ReactNode }) {
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center gap-6 p-4">
+      <BrandBackdrop />
+      <div className="flex items-center gap-2">
+        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+          <HardDrive className="h-4 w-4" />
+        </div>
+        <span className="text-[15px] font-semibold tracking-tight">DropVault</span>
+      </div>
+      {children}
+    </main>
+  );
 }
+
+const card = 'w-full shadow-lg animate-fade-up';
 
 export function PublicShare({ token }: { token: string }) {
   const [loading, setLoading] = useState(true);
@@ -65,34 +79,37 @@ export function PublicShare({ token }: { token: string }) {
     }
   }
 
-  if (loading)
+  if (loading) {
     return (
-      <Centered>
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </Centered>
+      <Shell>
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </Shell>
     );
+  }
 
-  if (error)
+  if (error) {
     return (
-      <Centered>
-        <Card className="w-full max-w-md">
+      <Shell>
+        <Card className={`${card} max-w-md`}>
           <CardHeader>
             <CardTitle>Link unavailable</CardTitle>
             <CardDescription>{error}</CardDescription>
           </CardHeader>
         </Card>
-      </Centered>
+      </Shell>
     );
+  }
 
-  if (resolution?.needsPassword && !details)
+  if (resolution?.needsPassword && !details) {
     return (
-      <Centered>
-        <Card className="w-full max-w-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Lock className="h-5 w-5" /> Password required
-            </CardTitle>
-            <CardDescription>This link is password-protected.</CardDescription>
+      <Shell>
+        <Card className={`${card} max-w-sm`}>
+          <CardHeader className="items-center text-center">
+            <div className="mb-1 flex h-11 w-11 items-center justify-center rounded-xl bg-muted">
+              <Lock className="h-5 w-5 text-muted-foreground" />
+            </div>
+            <CardTitle>Password required</CardTitle>
+            <CardDescription>This link is protected.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <Input
@@ -107,24 +124,26 @@ export function PublicShare({ token }: { token: string }) {
             </Button>
           </CardContent>
         </Card>
-      </Centered>
+      </Shell>
     );
+  }
 
-  if (resolution?.type === 'file' && details?.file)
+  if (resolution?.type === 'file' && details?.file) {
     return (
-      <Centered>
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 truncate">
-              <FileIcon className="h-5 w-5 text-primary" /> {details.file.name}
-            </CardTitle>
-            <CardDescription>
-              {formatBytes(details.file.size)} · {details.file.mimeType}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+      <Shell>
+        <Card className={`${card} max-w-md`}>
+          <CardContent className="flex flex-col items-center gap-5 pt-6 text-center">
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-500/10">
+              <FileIcon className="h-8 w-8 text-blue-500" strokeWidth={1.5} />
+            </div>
+            <div className="space-y-0.5">
+              <p className="break-all font-semibold">{details.file.name}</p>
+              <p className="text-sm text-muted-foreground">
+                {formatBytes(details.file.size)} · {details.file.mimeType}
+              </p>
+            </div>
             {resolution.allowDownload ? (
-              <Button className="w-full" onClick={() => download()}>
+              <Button size="lg" className="w-full" onClick={() => download()}>
                 <Download className="h-4 w-4" /> Download
               </Button>
             ) : (
@@ -132,27 +151,34 @@ export function PublicShare({ token }: { token: string }) {
             )}
           </CardContent>
         </Card>
-      </Centered>
+      </Shell>
     );
+  }
 
-  if (resolution?.type === 'folder' && details?.folder)
+  if (resolution?.type === 'folder' && details?.folder) {
     return (
-      <Centered>
-        <Card className="w-full max-w-lg">
+      <Shell>
+        <Card className={`${card} max-w-lg`}>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Folder className="h-5 w-5 text-primary" /> {details.folder.name}
+            <CardTitle className="flex items-center gap-2.5">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10">
+                <Folder className="h-4 w-4 text-amber-500" strokeWidth={1.75} />
+              </span>
+              {details.folder.name}
             </CardTitle>
             <CardDescription>{details.files?.length ?? 0} files</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-2">
+          <CardContent className="space-y-1">
             {(details.files ?? []).map((f) => (
-              <div key={f.id} className="flex items-center gap-3 rounded-lg border px-3 py-2">
-                <FileIcon className="h-4 w-4 text-muted-foreground" />
+              <div
+                key={f.id}
+                className="flex items-center gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-muted/60"
+              >
+                <FileIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
                 <span className="flex-1 truncate text-sm">{f.name}</span>
-                <span className="text-xs text-muted-foreground">{formatBytes(f.size)}</span>
+                <span className="text-xs tabular-nums text-muted-foreground">{formatBytes(f.size)}</span>
                 {resolution.allowDownload && (
-                  <Button size="sm" variant="ghost" onClick={() => download(f.id)} aria-label="Download">
+                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => download(f.id)} aria-label="Download">
                     <Download className="h-4 w-4" />
                   </Button>
                 )}
@@ -160,12 +186,13 @@ export function PublicShare({ token }: { token: string }) {
             ))}
           </CardContent>
         </Card>
-      </Centered>
+      </Shell>
     );
+  }
 
   return (
-    <Centered>
+    <Shell>
       <p className="text-sm text-muted-foreground">Nothing to show.</p>
-    </Centered>
+    </Shell>
   );
 }

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth-store';
 import { Sidebar } from '@/components/shell/sidebar';
-import { Header } from '@/components/shell/header';
+import { Topbar } from '@/components/shell/topbar';
 import { UploadManager } from '@/features/upload/upload-manager';
 
 export default function AppLayout({ children }: { children: ReactNode }) {
@@ -18,19 +18,19 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   if (status !== 'authenticated') {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      <div className="flex min-h-screen items-center justify-center">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex min-h-screen">
       <Sidebar />
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <Header />
-        <main className="flex-1 overflow-y-auto p-6">
-          <div className="mx-auto max-w-5xl">{children}</div>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Topbar />
+        <main className="flex-1 px-4 py-6 lg:px-8 lg:py-8">
+          <div className="mx-auto w-full max-w-6xl">{children}</div>
         </main>
       </div>
       <UploadManager />

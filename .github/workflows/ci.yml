@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint · Typecheck · Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm build
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: dropvault
+          POSTGRES_PASSWORD: dropvault
+          POSTGRES_DB: dropvault
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dropvault"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Generate ephemeral JWT keys
+        working-directory: apps/api
+        run: >-
+          node -e "import('jose').then(async j=>{const k=await
+          j.generateKeyPair('EdDSA',{crv:'Ed25519',extractable:true});console.log('JWT_PRIVATE_KEY='+Buffer.from(await
+          j.exportPKCS8(k.privateKey)).toString('base64'));console.log('JWT_PUBLIC_KEY='+Buffer.from(await
+          j.exportSPKI(k.publicKey)).toString('base64'))})" >> "$GITHUB_ENV"
+
+      - name: Write apps/api/.env.test
+        working-directory: apps/api
+        run: |
+          cat > .env.test <<EOF
+          NODE_ENV=test
+          PORT=4100
+          API_PREFIX=/api/v1
+          DATABASE_URL=postgresql://dropvault:dropvault@localhost:5432/dropvault_test?schema=public
+          DIRECT_URL=postgresql://dropvault:dropvault@localhost:5432/dropvault_test?schema=public
+          REDIS_URL=redis://localhost:6379/1
+          CORS_ORIGINS=http://localhost:3000
+          TRUST_PROXY=0
+          RATE_LIMIT_MAX=100000
+          LOG_LEVEL=error
+          JWT_PRIVATE_KEY=$JWT_PRIVATE_KEY
+          JWT_PUBLIC_KEY=$JWT_PUBLIC_KEY
+          JWT_KID=ci
+          WEB_URL=http://localhost:3000
+          MAIL_TRANSPORT=smtp
+          SMTP_HOST=localhost
+          SMTP_PORT=1025
+          S3_ENDPOINT=http://localhost:9000
+          S3_REGION=us-east-1
+          S3_BUCKET=dropvault-local
+          S3_ACCESS_KEY_ID=minioadmin
+          S3_SECRET_ACCESS_KEY=minioadmin
+          S3_FORCE_PATH_STYLE=true
+          SCAN_ENABLED=false
+          EOF
+
+      # globalSetup creates dropvault_test and runs `prisma migrate deploy` automatically.
+      - run: pnpm test
+
+  docker:
+    name: Docker build check
+    runs-on: ubuntu-latest
+    # Only post-merge to keep PRs fast (image builds are slow).
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.api
+          push: false
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.web
+          push: false
+          build-args: |
+            NEXT_PUBLIC_API_URL=https://api.dropvault.example/api/v1

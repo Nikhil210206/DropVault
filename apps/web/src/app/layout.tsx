@@ -4,14 +4,14 @@ import './globals.css';
 import { Providers } from '@/components/providers';
 
 export const metadata: Metadata = {
-  title: 'DropVault',
-  description: 'Secure cloud file sharing.',
+  title: 'DropVault — Secure file sharing',
+  description: 'Upload, organize, and share files securely.',
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="min-h-screen antialiased">
+      <body className="min-h-screen">
         <Providers>{children}</Providers>
       </body>
     </html>

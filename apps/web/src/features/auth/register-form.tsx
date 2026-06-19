@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { toast } from 'sonner';
+import { HardDrive } from 'lucide-react';
 import { registerSchema, type RegisterInput } from '@dropvault/shared';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -37,8 +38,11 @@ export function RegisterForm() {
   }
 
   return (
-    <Card className="w-full max-w-sm">
-      <CardHeader>
+    <Card className="w-full max-w-sm shadow-lg animate-fade-up">
+      <CardHeader className="items-center text-center">
+        <div className="mb-2 flex h-11 w-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+          <HardDrive className="h-5 w-5" />
+        </div>
         <CardTitle className="text-2xl">Create your account</CardTitle>
         <CardDescription>Start sharing files securely with DropVault</CardDescription>
       </CardHeader>

@@ -12,7 +12,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { formatDate } from '@/lib/utils';
 import { ShareDialog } from '@/features/share/share-dialog';
 
 interface Props {
@@ -21,32 +20,29 @@ interface Props {
   onDelete: () => void;
 }
 
-export function FolderRow({ folder, onRename, onDelete }: Props) {
+export function FolderCard({ folder, onRename, onDelete }: Props) {
   const router = useRouter();
   const [shareOpen, setShareOpen] = useState(false);
 
   return (
-    <div className="group flex items-center gap-3 border-b border-border px-4 py-2.5 transition-colors last:border-0 hover:bg-muted/50">
+    <div className="group relative rounded-xl border border-border bg-card p-3 transition-all hover:border-foreground/20 hover:shadow-sm">
       <button
         type="button"
         onClick={() => router.push(`/folders/${folder.id}`)}
-        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        className="block w-full text-left"
         title="Open folder"
       >
-        <Folder className="h-5 w-5 shrink-0 text-amber-500" strokeWidth={1.75} />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium">{folder.name}</span>
-          <span className="block text-xs text-muted-foreground sm:hidden">{formatDate(folder.createdAt)}</span>
-        </span>
+        <div className="mb-3 flex aspect-[4/3] items-center justify-center rounded-lg bg-amber-500/10">
+          <Folder className="h-8 w-8 text-amber-500" strokeWidth={1.5} />
+        </div>
+        <p className="truncate text-sm font-medium">{folder.name}</p>
+        <p className="text-xs text-muted-foreground">Folder</p>
       </button>
-      <span className="hidden w-24 shrink-0 text-right text-sm text-muted-foreground sm:block">—</span>
-      <span className="hidden w-32 shrink-0 text-right text-sm text-muted-foreground md:block">
-        {formatDate(folder.createdAt)}
-      </span>
-      <div className="w-9 shrink-0 text-right opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 [&:has([data-state=open])]:opacity-100">
+
+      <div className="absolute right-2.5 top-2.5 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 [&:has([data-state=open])]:opacity-100">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Folder actions">
+            <Button variant="outline" size="icon" className="h-7 w-7" aria-label="Folder actions">
               <MoreHorizontal className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
@@ -64,6 +60,7 @@ export function FolderRow({ folder, onRename, onDelete }: Props) {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
       <ShareDialog open={shareOpen} onOpenChange={setShareOpen} folderId={folder.id} targetName={folder.name} />
     </div>
   );

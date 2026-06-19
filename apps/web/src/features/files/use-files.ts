@@ -5,8 +5,11 @@ import { filesApi } from './files-api';
 
 export const filesKey = (folderId: string | null) => ['files', folderId ?? 'root'] as const;
 
-export function useFiles(folderId: string | null) {
-  return useQuery({ queryKey: filesKey(folderId), queryFn: () => filesApi.list(folderId) });
+export function useFiles(folderId: string | null, q?: string) {
+  return useQuery({
+    queryKey: [...filesKey(folderId), q ?? ''],
+    queryFn: () => filesApi.list(folderId, q),
+  });
 }
 
 export function useFileMutations(folderId: string | null) {

@@ -53,13 +53,17 @@ export function UploadDropzone({ folderId }: { folderId: string | null }) {
       onClick={() => inputRef.current?.click()}
       onKeyDown={(e) => e.key === 'Enter' && inputRef.current?.click()}
       className={cn(
-        'flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-8 text-center transition-colors',
-        dragging ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50',
+        'flex cursor-pointer items-center justify-center gap-2.5 rounded-xl border border-dashed px-6 py-4 text-sm transition-colors',
+        dragging
+          ? 'border-primary bg-accent text-foreground'
+          : 'border-border text-muted-foreground hover:border-foreground/25 hover:bg-muted/40',
       )}
     >
-      <UploadCloud className="h-8 w-8 text-muted-foreground" />
-      <p className="text-sm font-medium">Drag &amp; drop files here, or click to browse</p>
-      <p className="text-xs text-muted-foreground">Resumable multipart uploads, up to 5&nbsp;GiB each</p>
+      <UploadCloud className="h-5 w-5 shrink-0" strokeWidth={1.75} />
+      <span>
+        Drop files to upload, or <span className="font-medium text-primary">browse</span>
+        <span className="hidden text-muted-foreground sm:inline"> · up to 5&nbsp;GiB each</span>
+      </span>
       <input
         ref={inputRef}
         type="file"
